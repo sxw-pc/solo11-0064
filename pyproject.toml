@@ -1,0 +1,46 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "funnelcheck"
+version = "1.0.0"
+description = "本地、确定性的漏斗与留存计算核验台"
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [{ name = "FunnelCheck contributors" }]
+dependencies = [
+  "fastapi>=0.110,<1",
+  "uvicorn>=0.27,<1",
+  "pydantic>=2.6,<3",
+  "PyYAML>=6.0,<7",
+  "Jinja2>=3.1,<4",
+  "tzdata>=2024.1; platform_system == 'Windows'",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8.0,<9", "httpx>=0.27,<1"]
+
+[project.scripts]
+funnelcheck = "funnelcheck.cli:main"
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+include = ["funnelcheck*"]
+
+[tool.setuptools.package-data]
+funnelcheck = [
+  "fixtures/*.jsonl",
+  "fixtures/*.yaml",
+  "templates/*.html",
+  "static/*.css",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+filterwarnings = [
+  "error::DeprecationWarning:funnelcheck.*",
+]

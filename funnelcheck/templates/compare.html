@@ -1,0 +1,131 @@
+{% extends "base.html" %}
+{% block title %}运行对比 · 漏斗验算台{% endblock %}
+{% block content %}
+<nav class="breadcrumb"><a href="/">运行台账</a><span>/</span><span>{{ comparison.comparison_id }}</span></nav>
+
+<section class="page-head compact">
+  <div>
+    <p class="eyebrow">RUN COMPARISON</p>
+    <h1>运行对比</h1>
+    <p class="mono subtle">{{ comparison.comparison_id }}</p>
+  </div>
+  <div class="head-actions">
+    <a class="button" href="/comparisons/{{ comparison.comparison_id }}/compare.html">自包含报告</a>
+    <a class="button ghost" href="/api/comparisons/{{ comparison.comparison_id }}">JSON</a>
+  </div>
+</section>
+
+<section class="verdict-panel verdict-{{ comparison.verdict }}">
+  <div>
+    <p class="eyebrow">判定</p>
+    <h2>{{ comparison.verdict }}</h2>
+    <p>{{ comparison.explanation }}</p>
+  </div>
+  <div class="flag-row">
+    <span class="flag {{ 'on' if comparison.flags.config_changed else '' }}">规格变化</span>
+    <span class="flag {{ 'on' if comparison.flags.input_changed else '' }}">输入变化</span>
+    <span class="flag {{ 'on' if comparison.flags.metrics_changed else '' }}">指标变化</span>
+    <span class="flag {{ 'on' if comparison.flags.engine_changed else '' }}">引擎变化</span>
+  </div>
+</section>
+
+<section class="split">
+  <div class="panel">
+    <p class="stat-label">基线</p>
+    <h3>{{ comparison.baseline.title }}</h3>
+    <p class="mono subtle">{{ comparison.baseline.run_id }}</p>
+    <p>入口 <strong>{{ comparison.baseline.funnel.entered_users }}</strong> · 完成 <strong>{{ comparison.baseline.funnel.converted_users }}</strong> · 留存队列 <strong>{{ comparison.baseline.retention.cohort_size }}</strong></p>
+    <a href="/runs/{{ comparison.baseline.run_id }}">查看基线运行</a>
+  </div>
+  <div class="panel">
+    <p class="stat-label">候选</p>
+    <h3>{{ comparison.candidate.title }}</h3>
+    <p class="mono subtle">{{ comparison.candidate.run_id }}</p>
+    <p>入口 <strong>{{ comparison.candidate.funnel.entered_users }}</strong> · 完成 <strong>{{ comparison.candidate.funnel.converted_users }}</strong> · 留存队列 <strong>{{ comparison.candidate.retention.cohort_size }}</strong></p>
+    <a href="/runs/{{ comparison.candidate.run_id }}">查看候选运行</a>
+  </div>
+</section>
+
+<section class="panel">
+  <div class="panel-head">
+    <h2>指标差异</h2>
+    <span class="muted">{{ comparison.changed_metric_count }} 项发生变化</span>
+  </div>
+  {% set changed = comparison.metrics | selectattr("changed") | list %}
+  {% if changed %}
+  <div class="table-scroll">
+    <table>
+      <thead><tr><th>指标</th><th>基线</th><th>候选</th><th>差值</th><th>相对变化</th></tr></thead>
+      <tbody>
+        {% for item in changed %}
+        <tr>
+          <td>{{ item.label }}</td>
+          <td>{{ item.baseline if item.baseline is not none else "—" }}</td>
+          <td>{{ item.candidate if item.candidate is not none else "—" }}</td>
+          <td class="{{ 'delta-neg' if item.delta is not none and item.delta < 0 else 'delta-pos' }}">{{ item.delta if item.delta is not none else "—" }}</td>
+          <td>{{ item.delta_pct | signed_pct }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="empty-inline">核心漏斗与留存指标没有差异。</p>
+  {% endif %}
+</section>
+
+<section class="panel">
+  <div class="panel-head">
+    <h2>规格差异</h2>
+    <span class="muted">声明式计算语义</span>
+  </div>
+  {% if comparison.config_changes %}
+  <div class="table-scroll">
+    <table>
+      <thead><tr><th>路径</th><th>变化</th><th>基线</th><th>候选</th></tr></thead>
+      <tbody>
+        {% for item in comparison.config_changes %}
+        <tr>
+          <td><code>{{ item.path }}</code></td>
+          <td>{{ item.change }}</td>
+          <td>{{ item.baseline if item.baseline is defined else "—" }}</td>
+          <td>{{ item.candidate if item.candidate is defined else "—" }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="empty-inline">两次分析规格完全一致。</p>
+  {% endif %}
+</section>
+
+<section class="split">
+  <div class="panel">
+    <h2>输入指纹</h2>
+    <dl class="facts compact-facts">
+      <div><dt>基线原始 SHA-256</dt><dd class="mono">{{ comparison.input.baseline_sha256 }}</dd></div>
+      <div><dt>候选原始 SHA-256</dt><dd class="mono">{{ comparison.input.candidate_sha256 }}</dd></div>
+      <div><dt>基线规范化</dt><dd class="mono">{{ comparison.input.baseline_normalized_sha256 }}</dd></div>
+      <div><dt>候选规范化</dt><dd class="mono">{{ comparison.input.candidate_normalized_sha256 }}</dd></div>
+    </dl>
+  </div>
+  <div class="panel">
+    <h2>质量计数差异</h2>
+    {% if comparison.quality_changes %}
+    <div class="table-scroll">
+      <table>
+        <thead><tr><th>检查项</th><th>基线</th><th>候选</th><th>差值</th></tr></thead>
+        <tbody>
+          {% for item in comparison.quality_changes %}
+          <tr><td>{{ quality_labels.get(item.key, item.key) }}</td><td>{{ item.baseline }}</td><td>{{ item.candidate }}</td><td>{{ item.delta }}</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <p class="empty-inline">质量计数一致。</p>
+    {% endif %}
+  </div>
+</section>
+{% endblock %}

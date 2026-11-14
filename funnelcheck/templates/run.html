@@ -1,0 +1,185 @@
+{% extends "base.html" %}
+{% block title %}{{ report.spec.title }} · 漏斗验算台{% endblock %}
+{% block content %}
+<nav class="breadcrumb"><a href="/">运行台账</a><span>/</span><span>{{ report.run_id }}</span></nav>
+
+<section class="page-head compact">
+  <div>
+    <p class="eyebrow">RUN DETAIL</p>
+    <h1>{{ report.spec.title }}</h1>
+    <p class="mono subtle">{{ report.run_id }} · 引擎 {{ report.engine.version }} · 语义 {{ report.engine.semantics_version }}</p>
+  </div>
+  <div class="head-actions">
+    <a class="button" href="/runs/{{ report.run_id }}/report.html">自包含报告</a>
+    <a class="button ghost" href="/api/runs/{{ report.run_id }}">JSON</a>
+  </div>
+</section>
+
+<section class="stat-grid">
+  <div class="stat"><span class="stat-label">漏斗入口</span><strong>{{ report.funnel.entered_users }}</strong></div>
+  <div class="stat"><span class="stat-label">漏斗完成</span><strong>{{ report.funnel.converted_users }}</strong></div>
+  <div class="stat"><span class="stat-label">整体转化</span><strong>{{ report.funnel.overall_conversion | pct }}</strong></div>
+  <div class="stat"><span class="stat-label">留存队列</span><strong>{{ report.retention.cohort_size }}</strong></div>
+</section>
+
+<section class="panel">
+  <div class="panel-head">
+    <h2>漏斗 · {{ report.funnel.name }}</h2>
+    <span class="muted">窗口 {{ report.funnel.window }} · 从首步起算（含端点）</span>
+  </div>
+  <div class="table-scroll">
+    <table class="funnel-table">
+      <thead>
+        <tr><th>#</th><th>步骤</th><th>用户</th><th>较首步</th><th>较上一步</th><th>上步流失</th></tr>
+      </thead>
+      <tbody>
+        {% for step in report.funnel.steps %}
+        <tr>
+          <td class="num">{{ step.index }}</td>
+          <td>
+            <strong>{{ step.name }}</strong>
+            <div class="subtle mono">{{ step.event }}{% if step.where %} · 过滤{% endif %}</div>
+          </td>
+          <td class="bar-cell">
+            <div class="bar-row"><span>{{ step.users }}</span>
+              <span class="bar"><i style="width: {{ (step.users * 100 / funnel_max) if funnel_max else 0 }}%"></i></span>
+            </div>
+          </td>
+          <td>{{ step.conversion_from_first | pct }}</td>
+          <td>{{ step.conversion_from_previous | pct }}</td>
+          <td>{{ step.dropoff_from_previous }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  {% for field, values in report.funnel.by_segment.items() %}
+  <h3 class="subhead">漏斗分群 · <code>{{ field }}</code></h3>
+  <div class="table-scroll">
+    <table>
+      <thead><tr><th>分群值</th><th>入口</th><th>完成</th><th>转化率</th></tr></thead>
+      <tbody>
+        {% for item in values %}
+        <tr><td>{{ item.value }}</td><td>{{ item.entered_users }}</td><td>{{ item.converted_users }}</td><td>{{ item.overall_conversion | pct }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endfor %}
+</section>
+
+<section class="panel">
+  <div class="panel-head">
+    <h2>留存 · {{ report.retention.unit }} / {{ report.retention.mode }}</h2>
+    <span class="muted">观察截止 {{ report.retention.methodology.observation_cutoff }}</span>
+  </div>
+  <p class="subtle">
+    Cohort <code>{{ report.retention.cohort_event }}</code> →
+    回访 <code>{{ report.retention.return_event }}</code>；
+    周期完整结束后的次日才进入分母。
+  </p>
+  <div class="table-scroll">
+    <table>
+      <thead><tr><th>周期</th><th>可观察用户</th><th>留存用户</th><th>留存率</th></tr></thead>
+      <tbody>
+        {% for row in report.retention.periods %}
+        <tr>
+          <td><strong>{{ row.label }}</strong></td>
+          <td>{{ row.eligible_users }}</td>
+          <td>{{ row.retained_users }}</td>
+          <td class="bar-cell">
+            <div class="bar-row"><span>{{ row.retention_rate | pct }}</span>
+              <span class="bar"><i style="width: {{ (row.retention_rate * 100) if row.retention_rate is not none else 0 }}%"></i></span>
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  {% for field, values in report.retention.by_segment.items() %}
+  <h3 class="subhead">留存分群 · <code>{{ field }}</code></h3>
+  <div class="table-scroll">
+    <table>
+      <thead><tr><th>分群值</th><th>规模</th>{% for row in report.retention.periods %}<th>{{ row.label }}</th>{% endfor %}</tr></thead>
+      <tbody>
+        {% for item in values %}
+        <tr>
+          <td>{{ item.value }}</td><td>{{ item.cohort_size }}</td>
+          {% for period in report.retention.periods %}
+            {% set p = item.periods | selectattr("label", "equalto", period.label) | first %}
+            <td>{{ (p.retention_rate | pct) if p else "—" }}</td>
+          {% endfor %}
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endfor %}
+
+  <details>
+    <summary>按 Cohort 日期展开</summary>
+    <div class="table-scroll">
+      <table>
+        <thead><tr><th>日期</th><th>规模</th>{% for row in report.retention.periods %}<th>{{ row.label }}</th>{% endfor %}</tr></thead>
+        <tbody>
+          {% for cohort in report.retention.cohorts %}
+          <tr>
+            <td class="mono">{{ cohort.date }}</td><td>{{ cohort.cohort_size }}</td>
+            {% for period in report.retention.periods %}
+              {% set entry = cohort.periods.get(period.label) %}
+              <td>{{ entry.retention_rate | pct if entry else "—" }}</td>
+            {% endfor %}
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </details>
+</section>
+
+<section class="panel">
+  <div class="panel-head">
+    <h2>数据质量</h2>
+    <span class="muted">所有阈值与规则来自声明式规格</span>
+  </div>
+  <div class="quality-grid">
+    {% for key, value in report.quality.counts.items() %}
+    <div class="quality-item"><span>{{ quality_labels.get(key, key) }}</span><strong>{{ value }}</strong></div>
+    {% endfor %}
+  </div>
+  {% if report.quality.samples %}
+  <h3 class="subhead">样例</h3>
+  <div class="table-scroll">
+    <table>
+      <thead><tr><th>输入行</th><th>原因</th><th>事件 ID</th><th>说明</th></tr></thead>
+      <tbody>
+        {% for sample in report.quality.samples %}
+        <tr>
+          <td>{{ sample.line }}</td>
+          <td>{{ reason_labels.get(sample.reason, sample.reason) }}</td>
+          <td class="mono">{{ sample.event_id or "—" }}</td>
+          <td>{{ sample.detail or "—" }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+  <details>
+    <summary>计算规则与指纹</summary>
+    <dl class="facts">
+      <div><dt>同刻顺序</dt><dd><code>{{ report.quality.rules.same_timestamp_order }}</code></dd></div>
+      <div><dt>去重键 / 保留</dt><dd><code>{{ report.quality.rules.dedup_key }}</code> / <code>{{ report.quality.rules.dedup_keep }}</code></dd></div>
+      <div><dt>迟到阈值 / 策略</dt><dd>{{ report.quality.rules.late_after_seconds }} 秒 / <code>{{ report.quality.rules.late_policy }}</code></dd></div>
+      <div><dt>未来宽限</dt><dd>{{ report.quality.rules.future_grace_seconds }} 秒</dd></div>
+      <div><dt>输入 SHA-256</dt><dd class="mono">{{ report.input.sha256 }}</dd></div>
+      <div><dt>规范化 SHA-256</dt><dd class="mono">{{ report.input.normalized_sha256 }}</dd></div>
+      <div><dt>规格 SHA-256</dt><dd class="mono">{{ report.spec.sha256 }}</dd></div>
+      <div><dt>as_of</dt><dd class="mono">{{ report.spec.document.analysis.as_of }}</dd></div>
+    </dl>
+  </details>
+</section>
+{% endblock %}

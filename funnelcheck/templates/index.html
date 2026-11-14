@@ -1,0 +1,109 @@
+{% extends "base.html" %}
+{% block title %}运行台账 · 漏斗验算台{% endblock %}
+{% block content %}
+<section class="page-head">
+  <div>
+    <p class="eyebrow">LOCAL RUN LEDGER</p>
+    <h1>运行台账</h1>
+    <p class="lede">每一次计算都留下输入指纹、声明式规格与可追溯产物。点击运行查看漏斗、留存与数据质量。</p>
+  </div>
+  <div class="head-actions">
+    <code>python -m funnelcheck demo</code>
+  </div>
+</section>
+
+<section class="stat-grid" aria-label="台账概览">
+  <div class="stat">
+    <span class="stat-label">运行数</span>
+    <strong>{{ runs | length }}</strong>
+  </div>
+  <div class="stat">
+    <span class="stat-label">对比数</span>
+    <strong>{{ comparisons | length }}</strong>
+  </div>
+  <div class="stat">
+    <span class="stat-label">存储</span>
+    <strong class="small-value">SQLite 本地</strong>
+  </div>
+</section>
+
+{% if runs %}
+<section class="panel">
+  <div class="panel-head">
+    <h2>运行记录</h2>
+    <span class="muted">按台账写入时间倒序</span>
+  </div>
+  <div class="table-scroll">
+    <table>
+      <thead>
+        <tr>
+          <th>运行</th>
+          <th>漏斗入口</th>
+          <th>完成</th>
+          <th>转化率</th>
+          <th>留存队列</th>
+          <th>写入时间</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for run in runs %}
+        <tr>
+          <td>
+            <a class="run-link" href="/runs/{{ run.run_id }}">{{ run.title }}</a>
+            <div class="mono subtle">{{ run.run_id }}</div>
+          </td>
+          <td>{{ run.entered_users }}</td>
+          <td>{{ run.converted_users }}</td>
+          <td>{{ run.overall_conversion | pct }}</td>
+          <td>{{ run.cohort_size }}</td>
+          <td class="subtle">{{ run.created_at_utc | friendly_time }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% else %}
+<section class="empty-state">
+  <h2>还没有运行记录</h2>
+  <p>先用内置合成 fixture 跑一遍示例，或在本地对已有事件文件执行 run。</p>
+  <pre><code>python -m funnelcheck demo
+python -m funnelcheck run --events path/to/events.jsonl --spec path/to/spec.yaml</code></pre>
+</section>
+{% endif %}
+
+{% if comparisons %}
+<section class="panel">
+  <div class="panel-head">
+    <h2>运行对比</h2>
+    <span class="muted">归因只基于输入、规格与指标差异</span>
+  </div>
+  <div class="table-scroll">
+    <table>
+      <thead>
+        <tr>
+          <th>判定</th>
+          <th>基线 → 候选</th>
+          <th>变化指标</th>
+          <th>时间</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for item in comparisons %}
+        <tr>
+          <td><a class="verdict-link" href="/comparisons/{{ item.comparison_id }}">{{ item.verdict }}</a></td>
+          <td>
+            <span class="mono subtle">{{ item.baseline_run_id }}</span>
+            <span class="arrow">→</span>
+            <span class="mono subtle">{{ item.candidate_run_id }}</span>
+          </td>
+          <td>{{ item.changed_metric_count }}</td>
+          <td class="subtle">{{ item.created_at_utc | friendly_time }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endif %}
+{% endblock %}

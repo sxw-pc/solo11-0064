@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}漏斗验算台{% endblock %}</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <header class="site-header">
+    <div class="wrap header-row">
+      <a class="brand" href="/">
+        <span class="brand-mark" aria-hidden="true"></span>
+        <span>漏斗验算台</span>
+      </a>
+      <nav class="nav" aria-label="主导航">
+        <a href="/">运行台账</a>
+        <span class="local-badge">仅本机</span>
+      </nav>
+    </div>
+  </header>
+  <main class="wrap">
+    {% if error %}
+      <div class="notice danger" role="alert">
+        <strong>{{ error.code }}</strong>
+        <p>{{ error.message }}</p>
+        {% if error.hint %}<p class="muted">{{ error.hint }}</p>{% endif %}
+      </div>
+    {% endif %}
+    {% block content %}{% endblock %}
+  </main>
+  <footer class="site-footer">
+    <div class="wrap">
+      本地只读查看 · 无 CDN、外部字体、遥测或网络请求 · 确定性计算引擎
+    </div>
+  </footer>
+</body>
+</html>

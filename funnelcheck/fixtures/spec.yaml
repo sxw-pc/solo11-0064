@@ -1,0 +1,31 @@
+spec_version: 1
+title: 订阅转化与回访留存（基线）
+analysis:
+  timezone: UTC
+  as_of: "2026-03-16T00:00:00Z"
+  future_grace: 1h
+  late_after: 48h
+  late_policy: exclude
+events:
+  dedup_key: event_id
+  dedup_keep: first_received
+  same_timestamp_order: received_then_id
+funnel:
+  name: signup_to_purchase
+  window: 7d
+  steps:
+    - name: 浏览落地页
+      event: landing_view
+    - name: 完成注册
+      event: signup
+    - name: 完成购买
+      event: purchase
+retention:
+  cohort_event: signup
+  return_event: landing_view
+  unit: day
+  periods: [1, 3, 7]
+  mode: exact
+segments:
+  - field: channel
+  - field: region

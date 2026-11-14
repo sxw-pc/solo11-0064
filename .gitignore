@@ -1,0 +1,16 @@
+runs/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.benchmarks/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+*.sqlite
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
+*.tmp
+.DS_Store
+Thumbs.db

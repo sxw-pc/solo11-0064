@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block title %}{{ error.code }} · 漏斗验算台{% endblock %}
+{% block content %}
+<section class="empty-state">
+  <p class="eyebrow">LOCAL READ-ONLY ERROR</p>
+  <h1>无法打开这条记录</h1>
+  <p class="mono">{{ error.code }}</p>
+  <p>{{ error.message }}</p>
+  {% if error.hint %}<p class="muted">{{ error.hint }}</p>{% endif %}
+  <p><a class="button" href="/">返回运行台账</a></p>
+</section>
+{% endblock %}
