@@ -76,6 +76,54 @@
 
 <section class="panel">
   <div class="panel-head">
+    <h2>漏斗步骤配对</h2>
+    <span class="muted">完整有序谓词前缀身份</span>
+  </div>
+  {% if comparison.funnel_steps %}
+  <p class="empty-inline">步骤身份按截至当前步的完整有序谓词前缀匹配；仅“可比”项参与数值差值与指标变化统计，不可比项保留双方原值且不产生差值。</p>
+  <div class="table-scroll">
+    <table>
+      <thead><tr><th>状态</th><th>基线下标</th><th>候选下标</th><th>基线步骤</th><th>候选步骤</th><th>事件</th><th>谓词</th><th>基线用户</th><th>候选用户</th><th>差值</th></tr></thead>
+      <tbody>
+        {% for item in comparison.funnel_steps %}
+        <tr>
+          <td>
+            {% if item.status == "matched" %}
+            <span class="flag on">可比</span>
+            {% elif item.status == "removed" %}
+            <span class="flag">旧定义移除</span>
+            {% elif item.status == "added" %}
+            <span class="flag">新定义新增</span>
+            {% else %}
+            <span class="flag">历史报告（仅位置）</span>
+            {% endif %}
+          </td>
+          <td>{{ item.baseline_index if item.baseline_index is not none else "—" }}</td>
+          <td>{{ item.candidate_index if item.candidate_index is not none else "—" }}</td>
+          <td>{{ item.baseline_step.name if item.baseline_step else "—" }}</td>
+          <td>{{ item.candidate_step.name if item.candidate_step else "—" }}</td>
+          <td><code>{{ item.candidate_step.event if item.candidate_step else (item.baseline_step.event if item.baseline_step else "—") }}</code></td>
+          <td>
+            {% set shown_step = item.candidate_step if item.candidate_step else item.baseline_step %}
+            {% if shown_step and shown_step.where %}
+            <code>{{ shown_step.where | tojson }}</code>
+            {% else %}—{% endif %}
+          </td>
+          <td>{{ item.baseline if item.baseline is not none else "—" }}</td>
+          <td>{{ item.candidate if item.candidate is not none else "—" }}</td>
+          <td>{{ item.delta if item.delta is not none else "—" }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="empty-inline">两次运行均没有漏斗步骤。</p>
+  {% endif %}
+</section>
+
+<section class="panel">
+  <div class="panel-head">
     <h2>规格差异</h2>
     <span class="muted">声明式计算语义</span>
   </div>

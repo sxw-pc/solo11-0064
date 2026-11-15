@@ -1,13 +1,50 @@
-"""两次运行的指标、配置、输入差异与归因判定。"""
+"""两次运行的指标、配置、输入差异与归因判定。
+
+漏斗步骤的跨运行身份不依赖数组下标，而使用**完整有序谓词前缀**：
+
+    prefix(step_i) = [
+        (event_1, canonical_json(where_1)),
+        ...
+        (event_i, canonical_json(where_i)),
+    ]
+
+只有完整前缀相等的两个步骤才是同一语义步骤（status=matched），此时比较
+用户数并生成 delta；插入、删除、重命名以外的定义改变、重排都会让受影响后缀
+失去共同前缀，分别标记为 removed / added，保留双方原值但不计算差值。缺少
+event/where 定义字段的历史报告无法重建身份，按 legacy/index-only 处理，同样
+不猜测身份、不生成 delta。
+"""
 
 from __future__ import annotations
 
 from typing import Any
 
-from ..config import COMPARE_SCHEMA_VERSION, SEMANTICS_VERSION, canonical_json, make_comparison_id
+from ..config import (
+    COMPARE_SCHEMA_VERSION,
+    SEMANTICS_VERSION,
+    canonical_json,
+    make_comparison_id,
+)
 from ..errors import InputError
 
 _MISSING = object()
+
+# 步骤配对状态：
+# matched —— 完整有序谓词前缀相同，可直接比较用户数
+# removed —— 仅基线存在的旧定义步骤
+# added   —— 仅候选存在的新定义步骤
+# legacy  —— 旧报告缺少 event/where 定义，无法重建前缀身份
+STEP_MATCHED = "matched"
+STEP_REMOVED = "removed"
+STEP_ADDED = "added"
+STEP_LEGACY = "legacy"
+
+STEP_STATUS_LABELS = {
+    STEP_MATCHED: "可比",
+    STEP_REMOVED: "旧定义移除",
+    STEP_ADDED: "新定义新增",
+    STEP_LEGACY: "历史报告（仅位置）",
+}
 
 
 def _flatten(value: Any, prefix: str = "spec") -> dict[str, Any]:
@@ -33,9 +70,12 @@ def _config_changes(baseline: dict[str, Any], candidate: dict[str, Any]) -> list
         after = right.get(path, _MISSING)
         if before is _MISSING and after is _MISSING:
             continue
-        if before is not _MISSING and after is not _MISSING:
-            if canonical_json(before) == canonical_json(after):
-                continue
+        if (
+            before is not _MISSING
+            and after is not _MISSING
+            and canonical_json(before) == canonical_json(after)
+        ):
+            continue
         if before is _MISSING:
             changes.append({"path": path, "change": "added", "candidate": after})
         elif after is _MISSING:
@@ -80,28 +120,198 @@ def _metric(
     )
 
 
-def _metrics(base: dict[str, Any], cand: dict[str, Any]) -> list[dict[str, Any]]:
+def _has_identity(step: dict[str, Any]) -> bool:
+    """历史报告的步骤可能只有 name/users，缺少 event/where 定义。"""
+    return isinstance(step, dict) and "event" in step and "where" in step
+
+
+def _step_signature(step: dict[str, Any]) -> tuple[str, str]:
+    """单步签名：事件名 + where 的规范 JSON 文本。"""
+    return str(step.get("event")), canonical_json(step.get("where") or {})
+
+
+def _prefixes(steps: list[dict[str, Any]]) -> list[tuple[tuple[str, str], ...]]:
+    """截至当前步的完整有序谓词前缀序列。
+
+    同一次运行内前缀天然唯一（每个前缀至少在末尾位置上不同），重复单步
+    签名由其在序列中的出现位置自然消歧。
+    """
+    prefixes: list[tuple[tuple[str, str], ...]] = []
+    current: list[tuple[str, str]] = []
+    for step in steps:
+        current = [*current, _step_signature(step)]
+        prefixes.append(tuple(current))
+    return prefixes
+
+
+def _prefix_json(prefix: tuple[tuple[str, str], ...]) -> list[list[str]]:
+    return [[event, where_json] for event, where_json in prefix]
+
+
+def _step_key(status: str, index: int) -> str:
+    """稳定且互不冲突的指标键。
+
+    可比步骤沿用历史位置键 funnel.steps.{i}.users；不可比项带状态命名空间，
+    即使两侧下标相同也不会互相覆盖。
+    """
+    if status == STEP_MATCHED:
+        return f"funnel.steps.{index}.users"
+    return f"funnel.steps.{status}.{index}.users"
+
+
+def _step_label(status: str, index: int, step: dict[str, Any] | None) -> str:
+    name = (step or {}).get("name") or "?"
+    position = index + 1
+    if status == STEP_MATCHED:
+        return f"漏斗步骤 {position} · {name} · 用户"
+    if status == STEP_REMOVED:
+        return f"漏斗步骤 {position} · {name} · 用户（旧定义移除，不可比）"
+    if status == STEP_ADDED:
+        return f"漏斗步骤 {position} · {name} · 用户（新定义新增，不可比）"
+    return f"漏斗步骤 {position} · {name} · 用户（历史报告，仅位置）"
+
+
+def _unmatched_entry(
+    status: str,
+    *,
+    step: dict[str, Any] | None,
+    index: int,
+    prefix: tuple[tuple[str, str], ...] | None,
+    side: str,
+) -> dict[str, Any]:
+    """不可比条目：保留原数与定义，但不产生 delta/delta_pct，changed 恒为 False。"""
+    users = None if step is None else step.get("users")
+    entry: dict[str, Any] = {
+        "key": _step_key(status, index),
+        "label": _step_label(status, index, step),
+        "status": status,
+        "status_label": STEP_STATUS_LABELS[status],
+        "baseline_index": index if side == "baseline" else None,
+        "candidate_index": index if side == "candidate" else None,
+        "baseline": users if side == "baseline" else None,
+        "candidate": users if side == "candidate" else None,
+        "delta": None,
+        "delta_pct": None,
+        "changed": False,
+        "baseline_step": step if side == "baseline" else None,
+        "candidate_step": step if side == "candidate" else None,
+        "prefix": _prefix_json(prefix) if prefix is not None else None,
+    }
+    return entry
+
+
+def _legacy_entries(
+    b_steps: list[dict[str, Any]], c_steps: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """缺少定义的历史报告：按下标并排展示，标 legacy/index-only，不猜测身份。"""
+    entries: list[dict[str, Any]] = []
+    for index in range(max(len(b_steps), len(c_steps))):
+        left = b_steps[index] if index < len(b_steps) else None
+        right = c_steps[index] if index < len(c_steps) else None
+        name = (right or left or {}).get("name") or "?"
+        entries.append(
+            {
+                "key": _step_key(STEP_LEGACY, index),
+                "label": f"漏斗步骤 {index + 1} · {name} · 用户（历史报告，仅位置）",
+                "status": STEP_LEGACY,
+                "status_label": STEP_STATUS_LABELS[STEP_LEGACY],
+                "baseline_index": index if left is not None else None,
+                "candidate_index": index if right is not None else None,
+                "baseline": None if left is None else left.get("users"),
+                "candidate": None if right is None else right.get("users"),
+                "delta": None,
+                "delta_pct": None,
+                "changed": False,
+                "baseline_step": left,
+                "candidate_step": right,
+                "prefix": None,
+            }
+        )
+    return entries
+
+
+def _pair_funnel_steps(
+    b_steps: list[dict[str, Any]], c_steps: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """基于完整有序谓词前缀的确定性一对一保序配对。
+
+    前缀是逐步累积的，两个序列的共同前缀一旦在某位置分叉就不会再次汇合，
+    因此共同前缀部分即为全部 matched；分叉点之后的基线步骤为 removed、
+    候选步骤为 added，重排场景按各自原顺序输出且不会交叉配对。
+    """
+    if not all(_has_identity(step) for step in b_steps) or not all(
+        _has_identity(step) for step in c_steps
+    ):
+        return _legacy_entries(b_steps, c_steps)
+
+    b_prefixes = _prefixes(b_steps)
+    c_prefixes = _prefixes(c_steps)
+    matched_count = 0
+    for index in range(min(len(b_prefixes), len(c_prefixes))):
+        if b_prefixes[index] != c_prefixes[index]:
+            break
+        matched_count = index + 1
+
+    entries: list[dict[str, Any]] = []
+    for index in range(matched_count):
+        left, right = b_steps[index], c_steps[index]
+        delta, pct, changed = _diff(left.get("users"), right.get("users"))
+        entries.append(
+            {
+                "key": _step_key(STEP_MATCHED, index),
+                "label": _step_label(STEP_MATCHED, index, right),
+                "status": STEP_MATCHED,
+                "status_label": STEP_STATUS_LABELS[STEP_MATCHED],
+                "baseline_index": index,
+                "candidate_index": index,
+                "baseline": left.get("users"),
+                "candidate": right.get("users"),
+                "delta": delta,
+                "delta_pct": pct,
+                "changed": changed,
+                "baseline_step": left,
+                "candidate_step": right,
+                "prefix": _prefix_json(b_prefixes[index]),
+            }
+        )
+    for index in range(matched_count, len(b_steps)):
+        entries.append(
+            _unmatched_entry(
+                STEP_REMOVED,
+                step=b_steps[index],
+                index=index,
+                prefix=b_prefixes[index],
+                side="baseline",
+            )
+        )
+    for index in range(matched_count, len(c_steps)):
+        entries.append(
+            _unmatched_entry(
+                STEP_ADDED,
+                step=c_steps[index],
+                index=index,
+                prefix=c_prefixes[index],
+                side="candidate",
+            )
+        )
+    return entries
+
+
+def _metrics(
+    base: dict[str, Any],
+    cand: dict[str, Any],
+    step_entries: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
     items: list[dict[str, Any]] = []
     bf, cf = base.get("funnel", {}), cand.get("funnel", {})
     _metric(items, "funnel.entered_users", "漏斗入口用户", bf.get("entered_users"), cf.get("entered_users"))
     _metric(items, "funnel.converted_users", "漏斗完成用户", bf.get("converted_users"), cf.get("converted_users"))
     _metric(items, "funnel.overall_conversion", "漏斗整体转化率", bf.get("overall_conversion"), cf.get("overall_conversion"))
-    b_steps, c_steps = bf.get("steps", []), cf.get("steps", [])
-    for index in range(max(len(b_steps), len(c_steps))):
-        left = b_steps[index] if index < len(b_steps) else {}
-        right = c_steps[index] if index < len(c_steps) else {}
-        name = right.get("name") or left.get("name") or "?"
-        _metric(
-            items,
-            f"funnel.steps.{index}.users",
-            f"漏斗步骤 {index + 1} · {name} · 用户",
-            left.get("users"),
-            right.get("users"),
-        )
+    items.extend(step_entries)
     br, cr = base.get("retention", {}), cand.get("retention", {})
     _metric(items, "retention.cohort_size", "留存队列规模", br.get("cohort_size"), cr.get("cohort_size"))
-    b_periods = {row.get("label"): row for row in br.get("periods", [])}
-    c_periods = {row.get("label"): row for row in cr.get("periods", [])}
+    b_periods = {row.get("label"): row for row in (br.get("periods") or [])}
+    c_periods = {row.get("label"): row for row in (cr.get("periods") or [])}
     labels = sorted(set(b_periods) | set(c_periods), key=lambda item: _label_sort(item))
     for label in labels:
         left = b_periods.get(label, {})
@@ -145,7 +355,7 @@ def _summary(report: dict[str, Any]) -> dict[str, Any]:
             "overall_conversion": funnel.get("overall_conversion"),
             "steps": [
                 {"name": step.get("name"), "users": step.get("users")}
-                for step in funnel.get("steps", [])
+                for step in (funnel.get("steps") or [])
             ],
         },
         "retention": {
@@ -155,7 +365,7 @@ def _summary(report: dict[str, Any]) -> dict[str, Any]:
                     "retained_users": row.get("retained_users"),
                     "retention_rate": row.get("retention_rate"),
                 }
-                for row in retention.get("periods", [])
+                for row in (retention.get("periods") or [])
             },
         },
     }
@@ -190,7 +400,12 @@ def compare_reports(baseline: dict[str, Any], candidate: dict[str, Any]) -> dict
         baseline.get("spec", {}).get("document", {}),
         candidate.get("spec", {}).get("document", {}),
     )
-    metrics = _metrics(baseline, candidate)
+    b_steps = baseline.get("funnel", {}).get("steps", []) or []
+    c_steps = candidate.get("funnel", {}).get("steps", []) or []
+    step_entries = _pair_funnel_steps(b_steps, c_steps)
+    metrics = _metrics(baseline, candidate, step_entries)
+    # 只有 matched 前缀的步骤能贡献数值变化；不可比项 changed 恒为 False，
+    # 不会污染 metrics_changed 与 changed_metric_count。
     changed_metrics = [item for item in metrics if item["changed"]]
     base_input, cand_input = baseline.get("input", {}), candidate.get("input", {})
     input_changed = base_input.get("sha256") != cand_input.get("sha256")
@@ -231,6 +446,7 @@ def compare_reports(baseline: dict[str, Any], candidate: dict[str, Any]) -> dict
         },
         "metrics": metrics,
         "changed_metric_count": len(changed_metrics),
+        "funnel_steps": step_entries,
         "config_changes": config_changes,
         "quality_changes": _quality_changes(baseline, candidate),
     }

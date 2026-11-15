@@ -189,6 +189,58 @@ def render_run_markdown(report: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+STEP_STATUS_LABELS = {
+    "matched": "可比",
+    "removed": "旧定义移除",
+    "added": "新定义新增",
+    "legacy": "历史报告（仅位置）",
+}
+
+
+def _where_text(step: dict[str, Any] | None) -> str:
+    if not step:
+        return "—"
+    where = step.get("where") or {}
+    if not where:
+        return "—"
+    return "; ".join(f"{path}={_cell(value)}" for path, value in sorted(where.items()))
+
+
+def _step_pair_rows(comparison: dict[str, Any]) -> list[list[Any]]:
+    rows: list[list[Any]] = []
+    for entry in comparison.get("funnel_steps", []):
+        status = entry.get("status")
+        left = entry.get("baseline_step") or {}
+        right = entry.get("candidate_step") or {}
+        if status == "matched":
+            event = right.get("event") or left.get("event")
+            where = _where_text(right)
+            delta = "—" if entry.get("delta") is None else entry.get("delta")
+        elif status == "removed":
+            event, where, delta = left.get("event"), _where_text(left), "—"
+        elif status == "added":
+            event, where, delta = right.get("event"), _where_text(right), "—"
+        else:
+            event = right.get("event") or left.get("event") or "—"
+            where = _where_text(right) if right else _where_text(left)
+            delta = "—"
+        rows.append(
+            [
+                STEP_STATUS_LABELS.get(status, status),
+                entry.get("baseline_index") if entry.get("baseline_index") is not None else "—",
+                entry.get("candidate_index") if entry.get("candidate_index") is not None else "—",
+                left.get("name") if left else "—",
+                right.get("name") if right else "—",
+                event,
+                where,
+                entry.get("baseline") if entry.get("baseline") is not None else "—",
+                entry.get("candidate") if entry.get("candidate") is not None else "—",
+                delta,
+            ]
+        )
+    return rows
+
+
 def render_compare_markdown(comparison: dict[str, Any]) -> str:
     flags = comparison.get("flags", {})
     baseline = comparison.get("baseline", {})
@@ -230,6 +282,30 @@ def render_compare_markdown(comparison: dict[str, Any]) -> str:
         lines += _table(["指标", "基线", "候选", "差值", "相对变化"], rows)
     else:
         lines += ["核心指标无差异。", ""]
+    step_rows = _step_pair_rows(comparison)
+    lines += ["## 漏斗步骤配对", ""]
+    if step_rows:
+        lines += [
+            "> 步骤身份按截至当前步的完整有序谓词前缀匹配；仅“可比”项参与数值差值与指标变化统计，不可比项保留双方原值。",
+            "",
+        ]
+        lines += _table(
+            [
+                "状态",
+                "基线下标",
+                "候选下标",
+                "基线步骤",
+                "候选步骤",
+                "事件",
+                "谓词",
+                "基线用户",
+                "候选用户",
+                "差值",
+            ],
+            step_rows,
+        )
+    else:
+        lines += ["两次运行均没有漏斗步骤。", ""]
     lines += ["## 规格差异", ""]
     config_rows = []
     for item in comparison.get("config_changes", []):

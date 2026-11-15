@@ -194,6 +194,73 @@ def render_run_html(report: dict[str, Any]) -> str:
     return _shell(title, body)
 
 
+STEP_STATUS_LABELS = {
+    "matched": "可比",
+    "removed": "旧定义移除",
+    "added": "新定义新增",
+    "legacy": "历史报告（仅位置）",
+}
+
+
+def _where_html(step: dict[str, Any] | None) -> str:
+    if not step:
+        return '<span class="muted">—</span>'
+    where = step.get("where") or {}
+    if not where:
+        return '<span class="muted">—</span>'
+    text = "; ".join(f"{path}={_e(value)}" for path, value in sorted(where.items()))
+    return f"<code>{text}</code>"
+
+
+def _funnel_step_section(comparison: dict[str, Any]) -> str:
+    entries = comparison.get("funnel_steps", [])
+    if not entries:
+        return "<h2>漏斗步骤配对</h2><p class=\"muted\">两次运行均没有漏斗步骤。</p>"
+    rows = []
+    for entry in entries:
+        status = entry.get("status")
+        left = entry.get("baseline_step") or {}
+        right = entry.get("candidate_step") or {}
+        if status == "matched":
+            event = right.get("event") or left.get("event")
+            where = _where_html(right)
+            delta = "—" if entry.get("delta") is None else _e(entry.get("delta"))
+        elif status == "removed":
+            event, where, delta = _e(left.get("event")), _where_html(left), "—"
+        elif status == "added":
+            event, where, delta = _e(right.get("event")), _where_html(right), "—"
+        else:
+            event = right.get("event") or left.get("event") or "—"
+            where = _where_html(right) if right else _where_html(left)
+            delta = "—"
+        base_index = entry.get("baseline_index")
+        cand_index = entry.get("candidate_index")
+        rows.append(
+            [
+                _e(STEP_STATUS_LABELS.get(status, status)),
+                _e(base_index if base_index is not None else "—"),
+                _e(cand_index if cand_index is not None else "—"),
+                _e(left.get("name")) if left else '<span class="muted">—</span>',
+                _e(right.get("name")) if right else '<span class="muted">—</span>',
+                f"<code>{_e(event)}</code>",
+                where,
+                _e(entry.get("baseline")) if entry.get("baseline") is not None else "—",
+                _e(entry.get("candidate")) if entry.get("candidate") is not None else "—",
+                delta,
+            ]
+        )
+    table = _table(
+        ["状态", "基线下标", "候选下标", "基线步骤", "候选步骤", "事件", "谓词", "基线用户", "候选用户", "差值"],
+        rows,
+    )
+    return (
+        "<h2>漏斗步骤配对</h2>"
+        '<p class="sub">步骤身份按截至当前步的完整有序谓词前缀匹配；仅“可比”项参与数值差值与指标变化统计，'
+        "不可比项保留双方原值且不产生差值。</p>"
+        + table
+    )
+
+
 def _changed_metric_rows(comparison: dict[str, Any]) -> str:
     rows = []
     for item in comparison.get("metrics", []):
@@ -254,6 +321,7 @@ def render_compare_html(comparison: dict[str, Any]) -> str:
         f'<div class="panel"><div class="label muted">基线</div><code>{_e(baseline.get("run_id"))}</code><br>{_e(baseline.get("title"))}</div>'
         f'<div class="panel"><div class="label muted">候选</div><code>{_e(candidate.get("run_id"))}</code><br>{_e(candidate.get("title"))}</div>'
         "</div><h2>指标差异</h2>" + _changed_metric_rows(comparison)
+        + _funnel_step_section(comparison)
         + "<h2>规格差异</h2>" + config_html
         + "<h2>输入指纹</h2>" + _table(["项目", "值"], input_rows)
         + "<footer>差异分类基于原始输入哈希、规格文档与核心指标；不进行因果推断。</footer>"

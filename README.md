@@ -219,6 +219,20 @@ runs/
 
 对比只做**差异归因**，不做因果推断或显著性检验。规格差异会逐路径列出；输入差异用原始文件 SHA-256 与规范化 SHA-256 双重指纹表示。
 
+### 漏斗步骤的跨运行身份
+
+漏斗步骤不按数组下标配对，而按**完整有序谓词前缀**确定身份：
+
+```text
+prefix(step_i) = [(event_1, canonical_json(where_1)), …, (event_i, canonical_json(where_i))]
+```
+
+- 仅当两侧某步的完整前缀相等时才是同一语义步骤（`status="matched"`），此时比较 `users` 并生成 `delta`/`delta_pct`，只有这些条目可以计入 `changed_metric_count` 与 `flags.metrics_changed`。
+- 中间插入、删除、同名步骤更换 event/where、步骤重排都会让共同前缀在分叉点终止；受影响后缀分别标记为 `removed`（基线旧定义）与 `added`（候选新定义），保留双方原数但不生成差值，避免把资格条件不同的同名步骤误配。
+- 纯重命名不改变 `(event, where)` 前缀，仍可匹配；重复单步签名由前缀中的出现位置自然消歧。
+- 旧报告若缺少 `event`/`where` 定义字段，无法重建前缀身份，相关步骤标记为 `legacy`（index-only），按下标并排展示且不猜测身份、不生成差值。
+- `compare.json` 的 `funnel_steps` 与 `metrics` 中的漏斗步骤条目共享同一份配对结果，条目带稳定且互不冲突的键：可比较项沿用 `funnel.steps.{index}.users`，不可比项使用 `funnel.steps.{added|removed|legacy}.{index}.users`；overall 漏斗指标（入口/完成/整体转化率）始终按原报告值比较。
+
 ## 本地只读 Web
 
 - 默认且仅允许绑定 `127.0.0.1`、`::1` 或 `localhost`；`0.0.0.0` 等地址会直接拒绝。
