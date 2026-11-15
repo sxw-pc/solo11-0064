@@ -37,7 +37,23 @@ python -m funnelcheck compare \
   --runs-dir runs
 
 python -m funnelcheck list --runs-dir runs
+
+# 只读审计产物与台账的一致性（发现问题时退出码为 1）
+python -m funnelcheck audit-runs --runs-dir runs
+
+# 显式修复：dry-run 默认；--apply 才落库
+python -m funnelcheck audit-runs --runs-dir runs --repair manifest
+python -m funnelcheck audit-runs --runs-dir runs --repair manifest --apply
 ```
+
+`audit-runs` 逐个核对运行目录、`manifest.json`、三份报告与台账行：SHA256/字节数
+逐文件校验，目录名、报告 run_id、manifest run_id、台账 run_id 任意不一致都不会
+合并成一条健康记录。它覆盖两类提交断点：manifest 落盘后、台账提交前退出留下的
+**孤儿**（产物完整但台账缺失），以及台账已提交但产物被删/改写。修复有两种显式
+语义：`--repair manifest` 把校验通过的孤儿补登记进台账（manifest 作为完整运行
+的恢复依据）；`--repair ledger` 只报告不补登记（台账作为已提交运行的权威）。两种
+模式都不覆盖已有台账行、不伪造校验通过，且按 run_id 幂等；只读审计本身绝不修改
+文件或数据库。
 
 `demo` 会基于同一份事件生成两次对比：
 
@@ -84,6 +100,7 @@ funnelcheck/
   render_markdown.py     Markdown 报告
   render_html.py         自包含 HTML 报告
   ledger.py              SQLite 运行台账
+  audit.py               产物/台账一致性审计与两种修复语义
   web.py                 本地只读 FastAPI 查看器
   templates/             服务端 Jinja2 页面
   static/app.css         本地样式（无 CDN/字体）

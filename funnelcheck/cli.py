@@ -1,4 +1,4 @@
-"""命令行入口：demo / run / compare / list / serve。"""
+"""命令行入口：demo / run / compare / list / audit-runs / serve。"""
 
 from __future__ import annotations
 
@@ -8,10 +8,12 @@ from pathlib import Path
 from typing import Sequence
 
 from . import __version__
+from .audit import STATUS_LABELS, audit_runs, repair_runs
 from .config import DEFAULT_RUNS_DIR
 from .errors import ErrorCode, FunnelCheckError
 from .ledger import list_comparisons, list_runs
 from .pipeline import execute_comparison, execute_run, ledger_path, runs_root
+from .report import dump_json
 from .web import serve, validate_loopback_host
 
 _FIXTURES = Path(__file__).resolve().parent / "fixtures"
@@ -46,6 +48,23 @@ def _parser() -> argparse.ArgumentParser:
 
     listing = sub.add_parser("list", help="列出本地台账中的运行与对比")
     listing.add_argument("--runs-dir", default=DEFAULT_RUNS_DIR, help="运行产物目录")
+
+    audit = sub.add_parser(
+        "audit-runs", help="只读审计运行产物与台账的一致性，可选显式修复"
+    )
+    audit.add_argument("--runs-dir", default=DEFAULT_RUNS_DIR, help="运行产物目录")
+    audit.add_argument("--json", action="store_true", help="输出结构化 JSON")
+    audit.add_argument(
+        "--repair",
+        choices=("manifest", "ledger"),
+        default=None,
+        help="修复权威：manifest=把校验通过的孤儿补登记进台账；ledger=孤儿仅报告",
+    )
+    audit.add_argument(
+        "--apply",
+        action="store_true",
+        help="实际执行修复（默认 dry-run，只列出变更）",
+    )
 
     server = sub.add_parser("serve", help="启动仅回环地址可访问的本地只读查看器")
     server.add_argument("--host", default="127.0.0.1", help="仅允许 127.0.0.1 / ::1 / localhost")
@@ -141,6 +160,87 @@ def _list(runs_dir: str) -> int:
     return 0
 
 
+def _print_audit(result: dict) -> None:
+    print(f"审计运行目录：{result['runs_dir']}")
+    ledger_note = "" if result["ledger_present"] else "（不存在）"
+    print(f"台账：{result['ledger']}{ledger_note}")
+    if result.get("ledger_error"):
+        print(f"台账无法读取：{result['ledger_error']}（台账行证据缺失，结论降级）")
+    records = result["records"]
+    if not records:
+        print("未发现运行记录。")
+        return
+    print()
+    for record in records:
+        print(f"{record['run_id']}  {record['status']:<16} {record['status_label']}")
+        for diff in record["diffs"]:
+            print(f"    - {diff}")
+        if record["status"] == "orphan":
+            print("    - 可用 --repair manifest 补登记；--repair ledger 仅报告")
+    summary = result["summary"]
+    parts = " ".join(f"{key}={value}" for key, value in sorted(summary["by_status"].items()))
+    print(f"\n汇总：{summary['total']} 条记录 · {parts}")
+
+
+def _print_repair(plan: dict, post_audit: dict | None) -> None:
+    mode_label = (
+        "manifest 权威：校验通过的孤儿补登记进台账"
+        if plan["mode"] == "manifest"
+        else "ledger 权威：孤儿仅报告，不补登记"
+    )
+    state = "dry-run（未应用任何变更）" if plan["dry_run"] else "已应用"
+    print(f"修复模式：{mode_label} · {state}")
+    if plan["actions"]:
+        print("变更：")
+        for action in plan["actions"]:
+            line = f"  [{action['action']}] {action['run_id']} ← {action['source']}"
+            if action["applied"]:
+                line += "（已补登记）"
+            elif action.get("note"):
+                line += f"（{action['note']}）"
+            print(line)
+            print(f"      原因：{action['reason']}")
+    else:
+        print("变更：无")
+    if plan["skipped"]:
+        print("跳过：")
+        for item in plan["skipped"]:
+            print(f"  {item['run_id']}（{item['status']}）：{item['reason']}")
+    if plan["dry_run"] and plan["actions"]:
+        print("未应用任何变更；加 --apply 执行。")
+    if post_audit is not None:
+        summary = post_audit["summary"]
+        parts = " ".join(
+            f"{key}={value}" for key, value in sorted(summary["by_status"].items())
+        )
+        print(f"复审计：{summary['total']} 条记录 · {parts or '无记录'}")
+
+
+def _audit(runs_dir: str, as_json: bool, repair: str | None, apply: bool) -> int:
+    if apply and repair is None:
+        raise FunnelCheckError(
+            ErrorCode.USAGE, "--apply 需要同时指定 --repair", hint="修复默认 dry-run。"
+        )
+    root = runs_root(runs_dir)
+    result = audit_runs(root)
+    if repair is None:
+        if as_json:
+            print(dump_json(result))
+        else:
+            _print_audit(result)
+        return 0 if result["summary"]["clean"] else 1
+    plan = repair_runs(root, mode=repair, dry_run=not apply)
+    post_audit = audit_runs(root) if apply else None
+    if as_json:
+        print(dump_json({"audit": result, "repair": plan, "post_audit": post_audit}))
+    else:
+        _print_audit(result)
+        print()
+        _print_repair(plan, post_audit)
+    final = post_audit if post_audit is not None else result
+    return 0 if final["summary"]["clean"] else 1
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = _parser()
     args = parser.parse_args(argv)
@@ -163,6 +263,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 0
         if args.command == "list":
             return _list(args.runs_dir)
+        if args.command == "audit-runs":
+            return _audit(args.runs_dir, args.json, args.repair, args.apply)
         if args.command == "serve":
             validate_loopback_host(args.host)
             print(f"本地只读查看器：http://{args.host}:{args.port}  (Ctrl+C 停止)")
