@@ -26,7 +26,11 @@ CREATE TABLE IF NOT EXISTS runs (
     overall_conversion REAL,
     cohort_size INTEGER NOT NULL,
     summary_json TEXT NOT NULL,
-    artifact_dir TEXT NOT NULL
+    artifact_dir TEXT NOT NULL,
+    compute_mode TEXT NOT NULL DEFAULT 'full',
+    contribution_sha256 TEXT,
+    cache_reused_users INTEGER NOT NULL DEFAULT 0,
+    cache_recomputed_users INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS comparisons (
     comparison_id TEXT PRIMARY KEY,
@@ -42,6 +46,14 @@ CREATE TABLE IF NOT EXISTS comparisons (
 CREATE INDEX IF NOT EXISTS idx_runs_created ON runs(created_at_utc);
 CREATE INDEX IF NOT EXISTS idx_comparisons_created ON comparisons(created_at_utc);
 """
+
+# 旧版本台账缺少增量贡献列，按添加式迁移补齐。
+_RUN_EXTRA_COLUMNS = (
+    ("compute_mode", "TEXT NOT NULL DEFAULT 'full'"),
+    ("contribution_sha256", "TEXT"),
+    ("cache_reused_users", "INTEGER NOT NULL DEFAULT 0"),
+    ("cache_recomputed_users", "INTEGER NOT NULL DEFAULT 0"),
+)
 
 
 def _db_error(exc: sqlite3.Error, message: str) -> FunnelCheckError:
@@ -91,6 +103,15 @@ def init_ledger(path: str | Path) -> Path:
     try:
         with _connect(ledger_path, read_only=False) as connection:
             connection.executescript(_SCHEMA)
+            existing = {
+                row["name"]
+                for row in connection.execute("PRAGMA table_info(runs)").fetchall()
+            }
+            for name, declaration in _RUN_EXTRA_COLUMNS:
+                if name not in existing:
+                    connection.execute(
+                        f"ALTER TABLE runs ADD COLUMN {name} {declaration}"
+                    )
             connection.commit()
     except sqlite3.Error as exc:
         raise _db_error(exc, f"无法初始化台账：{ledger_path}") from exc
@@ -103,9 +124,19 @@ def record_run(
     *,
     artifact_dir: str,
     created_at: str | None = None,
+    incremental: dict[str, Any] | None = None,
 ) -> None:
     ledger_path = init_ledger(path)
     summary = run_summary(report)
+    compute_mode = "full"
+    contribution_sha256 = None
+    reused_users = 0
+    recomputed_users = 0
+    if incremental:
+        compute_mode = incremental.get("mode", "incremental")
+        contribution_sha256 = incremental.get("contribution_sha256")
+        reused_users = int(incremental.get("reused_user_count", 0))
+        recomputed_users = int(incremental.get("recomputed_user_count", 0))
     try:
         with _connect(ledger_path, read_only=False) as connection:
             connection.execute(
@@ -114,8 +145,9 @@ def record_run(
                     run_id, created_at_utc, title, input_sha256, normalized_sha256,
                     spec_sha256, engine_version, semantics_version, entered_users,
                     converted_users, overall_conversion, cohort_size, summary_json,
-                    artifact_dir
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    artifact_dir, compute_mode, contribution_sha256,
+                    cache_reused_users, cache_recomputed_users
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(run_id) DO UPDATE SET
                     created_at_utc=excluded.created_at_utc,
                     title=excluded.title,
@@ -129,7 +161,11 @@ def record_run(
                     overall_conversion=excluded.overall_conversion,
                     cohort_size=excluded.cohort_size,
                     summary_json=excluded.summary_json,
-                    artifact_dir=excluded.artifact_dir
+                    artifact_dir=excluded.artifact_dir,
+                    compute_mode=excluded.compute_mode,
+                    contribution_sha256=excluded.contribution_sha256,
+                    cache_reused_users=excluded.cache_reused_users,
+                    cache_recomputed_users=excluded.cache_recomputed_users
                 """,
                 (
                     report["run_id"],
@@ -146,6 +182,10 @@ def record_run(
                     report.get("retention", {}).get("cohort_size", 0),
                     canonical_json(summary),
                     artifact_dir,
+                    compute_mode,
+                    contribution_sha256,
+                    reused_users,
+                    recomputed_users,
                 ),
             )
             connection.commit()

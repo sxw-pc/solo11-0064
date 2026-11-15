@@ -1,8 +1,13 @@
-"""原始 JSONL 行到规范化事件的质量处理管线。"""
+"""原始 JSONL 行到规范化事件的质量处理管线。
+
+管线被拆成可独立调用的阶段（解析 → 去重 → 时间窗纳入 → 乱序检测），
+``normalize_batch`` 是全量编排；增量缓存模块复用同样的阶段函数，
+保证两条路径的质量计数与样例逐字段一致。
+"""
 
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import timedelta
 from typing import Any
 
@@ -103,33 +108,16 @@ def _parse_row(
     )
 
 
-def _included_hash(events: list[Event], order: str) -> str:
-    ordered = sorted(
-        events,
-        key=lambda item: (
-            item.user_id,
-            canonical_key(item, order),
-        ),
-    )
-    return sha256_json([item.canonical_payload() for item in ordered])
+@dataclass(frozen=True, slots=True)
+class ParseStage:
+    """解析阶段产物：通过字段/时间校验的候选事件与该阶段的质量追踪器。"""
+
+    candidates: tuple[Event, ...]
+    tracker: QualityTracker
 
 
-def _rules(spec: AnalysisSpecification) -> dict[str, Any]:
-    return {
-        "as_of": iso_utc(spec.analysis.as_of),
-        "timezone": spec.analysis.timezone,
-        "future_grace_seconds": spec.analysis.future_grace_seconds,
-        "late_after_seconds": spec.analysis.late_after_seconds,
-        "late_policy": spec.analysis.late_policy,
-        "dedup_key": spec.events.dedup_key,
-        "dedup_keep": spec.events.dedup_keep,
-        "same_timestamp_order": spec.events.same_timestamp_order,
-        "future_rule": "occurred_at > as_of + future_grace 时排除",
-        "late_rule": "received_at - occurred_at > late_after 时按策略处理",
-    }
-
-
-def normalize_batch(raw: RawInput, spec: AnalysisSpecification) -> NormalizedBatch:
+def parse_raw_rows(raw: RawInput, spec: AnalysisSpecification) -> ParseStage:
+    """阶段一：逐行解析，产出候选事件；质量计数与样例写入追踪器。"""
     tracker = QualityTracker()
     tracker.increment("records_seen", len(raw.rows))
     tracker.increment("blank_lines", raw.blank_lines)
@@ -143,15 +131,32 @@ def normalize_batch(raw: RawInput, spec: AnalysisSpecification) -> NormalizedBat
         event = _parse_row(row, spec, tracker)
         if event is not None:
             candidates.append(event)
+    return ParseStage(candidates=tuple(candidates), tracker=tracker)
 
+
+def apply_deduplication(
+    candidates: list[Event] | tuple[Event, ...],
+    spec: AnalysisSpecification,
+    tracker: QualityTracker,
+):
+    """阶段二：去重，并把重复计数写入追踪器。"""
     deduped = deduplicate(
-        candidates,
+        list(candidates),
         key=spec.events.dedup_key,
         keep=spec.events.dedup_keep,
     )
     tracker.increment("duplicate_rows", deduped.duplicate_rows)
     tracker.increment("duplicate_groups", deduped.duplicate_groups)
-    for event in deduped.events:
+    return deduped
+
+
+def apply_inclusion(
+    deduped_events: tuple[Event, ...],
+    spec: AnalysisSpecification,
+    tracker: QualityTracker,
+) -> tuple[list[Event], set[str]]:
+    """阶段三：去重后事件的标记采样、未来/迟到判定与纳入。"""
+    for event in deduped_events:
         if "invalid_properties" in event.flags:
             tracker.increment("invalid_properties")
             tracker.sample(
@@ -173,7 +178,7 @@ def normalize_batch(raw: RawInput, spec: AnalysisSpecification) -> NormalizedBat
     late_after = timedelta(seconds=spec.analysis.late_after_seconds)
     included: list[Event] = []
     included_users: set[str] = set()
-    for event in deduped.events:
+    for event in deduped_events:
         flags = list(event.flags)
         exclude_reason: str | None = None
         if event.occurred_at > future_threshold:
@@ -205,10 +210,11 @@ def normalize_batch(raw: RawInput, spec: AnalysisSpecification) -> NormalizedBat
             continue
         included.append(replace(event, flags=tuple(flags)))
         included_users.add(event.user_id)
+    return included, included_users
 
-    included.sort(
-        key=lambda item: (item.user_id, canonical_key(item, spec.events.same_timestamp_order))
-    )
+
+def apply_out_of_order(included: list[Event], tracker: QualityTracker) -> None:
+    """阶段四：按原始行序检测同一用户的事件时间回退。"""
     last_by_user: dict[str, Any] = {}
     for event in sorted(included, key=lambda item: item.line_no):
         previous = last_by_user.get(event.user_id)
@@ -222,12 +228,55 @@ def normalize_batch(raw: RawInput, spec: AnalysisSpecification) -> NormalizedBat
         elif previous is None or event.occurred_at > previous:
             last_by_user[event.user_id] = event.occurred_at
 
-    tracker.increment("included_events", len(included))
+
+def sort_included(events: list[Event], spec: AnalysisSpecification) -> list[Event]:
+    """纳入事件的最终规范排序（用户 + 规范事件键）。"""
+    return sorted(
+        events,
+        key=lambda item: (item.user_id, canonical_key(item, spec.events.same_timestamp_order)),
+    )
+
+
+def _included_hash(events: list[Event], order: str) -> str:
+    ordered = sorted(
+        events,
+        key=lambda item: (
+            item.user_id,
+            canonical_key(item, order),
+        ),
+    )
+    return sha256_json([item.canonical_payload() for item in ordered])
+
+
+def _rules(spec: AnalysisSpecification) -> dict[str, Any]:
+    return {
+        "as_of": iso_utc(spec.analysis.as_of),
+        "timezone": spec.analysis.timezone,
+        "future_grace_seconds": spec.analysis.future_grace_seconds,
+        "late_after_seconds": spec.analysis.late_after_seconds,
+        "late_policy": spec.analysis.late_policy,
+        "dedup_key": spec.events.dedup_key,
+        "dedup_keep": spec.events.dedup_keep,
+        "same_timestamp_order": spec.events.same_timestamp_order,
+        "future_rule": "occurred_at > as_of + future_grace 时排除",
+        "late_rule": "received_at - occurred_at > late_after 时按策略处理",
+    }
+
+
+def normalize_batch(raw: RawInput, spec: AnalysisSpecification) -> NormalizedBatch:
+    stage = parse_raw_rows(raw, spec)
+    tracker = stage.tracker
+    deduped = apply_deduplication(stage.candidates, spec, tracker)
+    included, included_users = apply_inclusion(deduped.events, spec, tracker)
+    apply_out_of_order(included, tracker)
+
+    ordered = sort_included(included, spec)
+    tracker.increment("included_events", len(ordered))
     tracker.increment("included_users", len(included_users))
-    tracker.increment("excluded_events", len(raw.rows) - len(included))
+    tracker.increment("excluded_events", len(raw.rows) - len(ordered))
     return NormalizedBatch(
-        events=tuple(included),
+        events=tuple(ordered),
         quality=tracker.finalize(_rules(spec)),
-        normalized_sha256=_included_hash(included, spec.events.same_timestamp_order),
+        normalized_sha256=_included_hash(ordered, spec.events.same_timestamp_order),
         raw_sha256=raw.sha256,
     )

@@ -81,8 +81,12 @@ def build_run_report(
     }
 
 
-def _artifact_manifest(report: dict[str, Any], artifacts: dict[str, str]) -> dict[str, Any]:
-    return {
+def _artifact_manifest(
+    report: dict[str, Any],
+    artifacts: dict[str, str],
+    incremental: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    manifest = {
         "schema_version": RUN_SCHEMA_VERSION,
         "run_id": report["run_id"],
         "status": "complete",
@@ -92,6 +96,9 @@ def _artifact_manifest(report: dict[str, Any], artifacts: dict[str, str]) -> dic
         "spec_sha256": report["spec"]["sha256"],
         "artifacts": artifacts,
     }
+    if incremental is not None:
+        manifest["incremental"] = incremental
+    return manifest
 
 
 def _hashed_artifacts(run_dir: Path, names: list[str]) -> dict[str, Any]:
@@ -103,7 +110,12 @@ def _hashed_artifacts(run_dir: Path, names: list[str]) -> dict[str, Any]:
     return result
 
 
-def write_run_artifacts(report: dict[str, Any], run_dir: str | Path) -> tuple[str, ...]:
+def write_run_artifacts(
+    report: dict[str, Any],
+    run_dir: str | Path,
+    *,
+    incremental: dict[str, Any] | None = None,
+) -> tuple[str, ...]:
     directory = Path(run_dir)
     files = {
         "report.json": dump_json(report),
@@ -112,7 +124,9 @@ def write_run_artifacts(report: dict[str, Any], run_dir: str | Path) -> tuple[st
     }
     for name, content in files.items():
         write_text_atomic(directory / name, content)
-    manifest = _artifact_manifest(report, _hashed_artifacts(directory, list(files)))
+    manifest = _artifact_manifest(
+        report, _hashed_artifacts(directory, list(files)), incremental
+    )
     write_text_atomic(directory / "manifest.json", dump_json(manifest))
     return tuple(sorted([*files, "manifest.json"]))
 

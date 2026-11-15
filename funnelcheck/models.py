@@ -118,6 +118,8 @@ class RunOutcome:
     artifact_dir: Path
     report: dict[str, Any]
     written: tuple[str, ...] = field(default_factory=tuple)
+    compute_mode: str = "full"
+    incremental: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True, slots=True)

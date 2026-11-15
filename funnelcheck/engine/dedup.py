@@ -32,11 +32,22 @@ def _choose(events: list[Event], keep: str) -> Event:
     return min(events, key=lambda item: item.line_no)
 
 
+def content_key(event: Event) -> str:
+    """content 去重模式的规范化完整事件键（不含 event_id）。"""
+    return _content_key(event)
+
+
+def group_key_for(event: Event, key: str) -> str:
+    """去重组标识：event_id 模式用事件 ID，content 模式用规范化完整事件键。"""
+    if key == "event_id":
+        return event.event_id
+    return _content_key(event)
+
+
 def deduplicate(events: list[Event], *, key: str, keep: str) -> DedupResult:
     groups: dict[str, list[Event]] = {}
     for event in events:
-        group_key = event.event_id if key == "event_id" else _content_key(event)
-        groups.setdefault(group_key, []).append(event)
+        groups.setdefault(group_key_for(event, key), []).append(event)
 
     kept: list[Event] = []
     duplicate_rows = 0

@@ -1,4 +1,8 @@
-"""按本地日历周期计算队列留存。"""
+"""按本地日历周期计算队列留存。
+
+与漏斗模块相同，计算拆成用户级贡献（可缓存）与全局聚合两层，
+保证全量重跑与增量复用经过完全一致的聚合语义。
+"""
 
 from __future__ import annotations
 
@@ -26,6 +30,24 @@ class CohortMember:
     cohort_date: date
     return_periods: frozenset[int]
     segments: dict[str, str]
+
+
+@dataclass(frozen=True, slots=True)
+class RetentionContribution:
+    """单个用户对留存的贡献，JSON 可序列化以便增量缓存复用。"""
+
+    user_id: str
+    cohort_date: str
+    return_periods: tuple[int, ...]
+    segments: dict[str, str]
+
+    def as_member(self) -> CohortMember:
+        return CohortMember(
+            user_id=self.user_id,
+            cohort_date=date.fromisoformat(self.cohort_date),
+            return_periods=frozenset(self.return_periods),
+            segments=dict(self.segments),
+        )
 
 
 def _is_retained(member: CohortMember, period: int, mode: str) -> bool:
@@ -75,54 +97,82 @@ def _aggregate(
     }
 
 
-def _members(
-    events: Iterable[Event], spec: AnalysisSpecification, observation_date: date
-) -> list[CohortMember]:
-    spec_retention = spec.retention
+def user_retention_contribution(
+    user_id: str,
+    events: list[Event],
+    spec: AnalysisSpecification,
+    *,
+    observation_date: date | None = None,
+) -> RetentionContribution | None:
+    """计算单个用户的留存贡献；没有有效 cohort 事件时返回 None。"""
+    retention_spec = spec.retention
     zone = get_zone(spec.analysis.timezone)
-    grouped = group_by_user(events)
     fields = [item.field for item in spec.segments]
-    max_period = max(spec_retention.periods)
-    members: list[CohortMember] = []
+    max_period = max(retention_spec.periods)
+    if observation_date is None:
+        observation_date = to_local_date(
+            spec.analysis.as_of
+            + timedelta(seconds=spec.analysis.future_grace_seconds),
+            zone,
+        )
+    ordered = sorted(
+        events,
+        key=lambda item: canonical_key(item, spec.events.same_timestamp_order),
+    )
+    cohort_event = next(
+        (item for item in ordered if item.event_name == retention_spec.cohort_event),
+        None,
+    )
+    if cohort_event is None:
+        return None
+    cohort_date = to_local_date(cohort_event.occurred_at, zone)
+    if cohort_date > observation_date:
+        return None
+    return_periods: set[int] = set()
+    for item in ordered:
+        if item.event_name != retention_spec.return_event:
+            continue
+        if item.occurred_at < cohort_event.occurred_at:
+            continue
+        index = period_index(
+            to_local_date(item.occurred_at, zone), cohort_date, retention_spec.unit
+        )
+        if index is not None and 1 <= index <= max_period:
+            return_periods.add(index)
+    return RetentionContribution(
+        user_id=user_id,
+        cohort_date=cohort_date.isoformat(),
+        return_periods=tuple(sorted(return_periods)),
+        segments={field: cohort_event.segment_value(field) for field in fields},
+    )
+
+
+def retention_contributions(
+    events: Iterable[Event],
+    spec: AnalysisSpecification,
+    *,
+    observation_date: date | None = None,
+) -> list[RetentionContribution]:
+    """全量路径：对每个用户计算留存贡献。"""
+    grouped = group_by_user(events)
+    contributions: list[RetentionContribution] = []
     for user_id in sorted(grouped):
-        ordered = sorted(
+        contribution = user_retention_contribution(
+            user_id,
             grouped[user_id],
-            key=lambda item: canonical_key(item, spec.events.same_timestamp_order),
+            spec,
+            observation_date=observation_date,
         )
-        cohort_event = next(
-            (item for item in ordered if item.event_name == spec_retention.cohort_event),
-            None,
-        )
-        if cohort_event is None:
-            continue
-        cohort_date = to_local_date(cohort_event.occurred_at, zone)
-        if cohort_date > observation_date:
-            continue
-        return_periods: set[int] = set()
-        for item in ordered:
-            if item.event_name != spec_retention.return_event:
-                continue
-            if item.occurred_at < cohort_event.occurred_at:
-                continue
-            index = period_index(to_local_date(item.occurred_at, zone), cohort_date, spec_retention.unit)
-            if index is not None and 1 <= index <= max_period:
-                return_periods.add(index)
-        members.append(
-            CohortMember(
-                user_id=user_id,
-                cohort_date=cohort_date,
-                return_periods=frozenset(return_periods),
-                segments={
-                    field: cohort_event.segment_value(field) for field in fields
-                },
-            )
-        )
-    return members
+        if contribution is not None:
+            contributions.append(contribution)
+    return contributions
 
 
-def compute_retention(
-    events: Iterable[Event], spec: AnalysisSpecification
+def aggregate_retention(
+    contributions: list[RetentionContribution],
+    spec: AnalysisSpecification,
 ) -> dict[str, Any]:
+    """从（可来自缓存的）用户级贡献汇总完整留存报告。"""
     retention_spec = spec.retention
     periods = list(retention_spec.periods)
     unit = retention_spec.unit
@@ -132,7 +182,7 @@ def compute_retention(
         seconds=spec.analysis.future_grace_seconds
     )
     observation_date = to_local_date(observation_at, zone)
-    members = _members(events, spec, observation_date)
+    members = [contribution.as_member() for contribution in contributions]
     overall = _aggregate(members, periods, unit, mode, observation_date)
 
     cohorts: list[dict[str, Any]] = []
@@ -184,3 +234,9 @@ def compute_retention(
             "same_timestamp_order": spec.events.same_timestamp_order,
         },
     }
+
+
+def compute_retention(
+    events: Iterable[Event], spec: AnalysisSpecification
+) -> dict[str, Any]:
+    return aggregate_retention(retention_contributions(events, spec), spec)
