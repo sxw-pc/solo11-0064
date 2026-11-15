@@ -83,14 +83,24 @@ def _metric(
 def _metrics(base: dict[str, Any], cand: dict[str, Any]) -> list[dict[str, Any]]:
     items: list[dict[str, Any]] = []
     bf, cf = base.get("funnel", {}), cand.get("funnel", {})
+    _metric(items, "funnel.attempts", "漏斗入口尝试", bf.get("attempts"), cf.get("attempts"))
     _metric(items, "funnel.entered_users", "漏斗入口用户", bf.get("entered_users"), cf.get("entered_users"))
+    _metric(items, "funnel.converted_attempts", "漏斗完成尝试", bf.get("converted_attempts"), cf.get("converted_attempts"))
     _metric(items, "funnel.converted_users", "漏斗完成用户", bf.get("converted_users"), cf.get("converted_users"))
     _metric(items, "funnel.overall_conversion", "漏斗整体转化率", bf.get("overall_conversion"), cf.get("overall_conversion"))
+    _metric(items, "funnel.attempt_conversion", "漏斗尝试转化率", bf.get("attempt_conversion"), cf.get("attempt_conversion"))
     b_steps, c_steps = bf.get("steps", []), cf.get("steps", [])
     for index in range(max(len(b_steps), len(c_steps))):
         left = b_steps[index] if index < len(b_steps) else {}
         right = c_steps[index] if index < len(c_steps) else {}
         name = right.get("name") or left.get("name") or "?"
+        _metric(
+            items,
+            f"funnel.steps.{index}.attempts",
+            f"漏斗步骤 {index + 1} · {name} · 尝试",
+            left.get("attempts"),
+            right.get("attempts"),
+        )
         _metric(
             items,
             f"funnel.steps.{index}.users",
@@ -140,11 +150,15 @@ def _summary(report: dict[str, Any]) -> dict[str, Any]:
         "spec_sha256": report.get("spec", {}).get("sha256"),
         "funnel": {
             "name": funnel.get("name"),
+            "entry_mode": funnel.get("entry_mode"),
+            "attempts": funnel.get("attempts"),
             "entered_users": funnel.get("entered_users"),
+            "converted_attempts": funnel.get("converted_attempts"),
             "converted_users": funnel.get("converted_users"),
             "overall_conversion": funnel.get("overall_conversion"),
+            "attempt_conversion": funnel.get("attempt_conversion"),
             "steps": [
-                {"name": step.get("name"), "users": step.get("users")}
+                {"name": step.get("name"), "attempts": step.get("attempts"), "users": step.get("users")}
                 for step in funnel.get("steps", [])
             ],
         },

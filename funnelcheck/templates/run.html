@@ -16,21 +16,24 @@
 </section>
 
 <section class="stat-grid">
-  <div class="stat"><span class="stat-label">漏斗入口</span><strong>{{ report.funnel.entered_users }}</strong></div>
-  <div class="stat"><span class="stat-label">漏斗完成</span><strong>{{ report.funnel.converted_users }}</strong></div>
-  <div class="stat"><span class="stat-label">整体转化</span><strong>{{ report.funnel.overall_conversion | pct }}</strong></div>
+  <div class="stat"><span class="stat-label">漏斗入口（用户）</span><strong>{{ report.funnel.entered_users }}</strong></div>
+  <div class="stat"><span class="stat-label">漏斗完成（用户）</span><strong>{{ report.funnel.converted_users }}</strong></div>
+  <div class="stat"><span class="stat-label">整体转化（用户）</span><strong>{{ report.funnel.overall_conversion | pct }}</strong></div>
+  <div class="stat"><span class="stat-label">入口尝试</span><strong>{{ report.funnel.attempts }}</strong></div>
+  <div class="stat"><span class="stat-label">尝试转化</span><strong>{{ report.funnel.attempt_conversion | pct }}</strong></div>
   <div class="stat"><span class="stat-label">留存队列</span><strong>{{ report.retention.cohort_size }}</strong></div>
 </section>
 
 <section class="panel">
   <div class="panel-head">
     <h2>漏斗 · {{ report.funnel.name }}</h2>
-    <span class="muted">窗口 {{ report.funnel.window }} · 从首步起算（含端点）</span>
+    <span class="muted">窗口 {{ report.funnel.window }} · 从首步起算（含端点）· 复入口径 {{ report.funnel.methodology.entry_mode_label }}（<code>{{ report.funnel.entry_mode }}</code>）</span>
   </div>
+  <p class="subtle">{{ report.funnel.methodology.entry_rule }}</p>
   <div class="table-scroll">
     <table class="funnel-table">
       <thead>
-        <tr><th>#</th><th>步骤</th><th>用户</th><th>较首步</th><th>较上一步</th><th>上步流失</th></tr>
+        <tr><th>#</th><th>步骤</th><th>尝试</th><th>去重用户</th><th>较首步(尝试)</th><th>较上一步(尝试)</th><th>较首步(用户)</th><th>上步流失</th></tr>
       </thead>
       <tbody>
         {% for step in report.funnel.steps %}
@@ -41,12 +44,14 @@
             <div class="subtle mono">{{ step.event }}{% if step.where %} · 过滤{% endif %}</div>
           </td>
           <td class="bar-cell">
-            <div class="bar-row"><span>{{ step.users }}</span>
-              <span class="bar"><i style="width: {{ (step.users * 100 / funnel_max) if funnel_max else 0 }}%"></i></span>
+            <div class="bar-row"><span>{{ step.attempts }}</span>
+              <span class="bar"><i style="width: {{ (step.attempts * 100 / funnel_max) if funnel_max else 0 }}%"></i></span>
             </div>
           </td>
+          <td>{{ step.users }}</td>
           <td>{{ step.conversion_from_first | pct }}</td>
           <td>{{ step.conversion_from_previous | pct }}</td>
+          <td>{{ step.user_conversion_from_first | pct }}</td>
           <td>{{ step.dropoff_from_previous }}</td>
         </tr>
         {% endfor %}
@@ -58,10 +63,10 @@
   <h3 class="subhead">漏斗分群 · <code>{{ field }}</code></h3>
   <div class="table-scroll">
     <table>
-      <thead><tr><th>分群值</th><th>入口</th><th>完成</th><th>转化率</th></tr></thead>
+      <thead><tr><th>分群值</th><th>入口尝试</th><th>入口用户</th><th>完成尝试</th><th>完成用户</th><th>转化率(尝试)</th><th>转化率(用户)</th></tr></thead>
       <tbody>
         {% for item in values %}
-        <tr><td>{{ item.value }}</td><td>{{ item.entered_users }}</td><td>{{ item.converted_users }}</td><td>{{ item.overall_conversion | pct }}</td></tr>
+        <tr><td>{{ item.value }}</td><td>{{ item.attempts }}</td><td>{{ item.entered_users }}</td><td>{{ item.converted_attempts }}</td><td>{{ item.converted_users }}</td><td>{{ item.attempt_conversion | pct }}</td><td>{{ item.overall_conversion | pct }}</td></tr>
         {% endfor %}
       </tbody>
     </table>

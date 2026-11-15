@@ -62,12 +62,15 @@ def _parser() -> argparse.ArgumentParser:
 def _print_run(outcome: object) -> None:
     report = outcome.report  # type: ignore[attr-defined]
     funnel = report["funnel"]
+    methodology = funnel.get("methodology", {})
     print(f"运行完成：{outcome.run_id}")  # type: ignore[attr-defined]
     print(f"产物目录：{outcome.artifact_dir}")  # type: ignore[attr-defined]
     print(
         "漏斗："
         f"{funnel['entered_users']} → {funnel['converted_users']}，"
         f"整体转化 {_pct(funnel['overall_conversion'])}；"
+        f"复入口径 {methodology.get('entry_mode_label')}（{funnel.get('entry_mode')}），"
+        f"尝试 {funnel.get('attempts')} → {funnel.get('converted_attempts')}；"
         f"留存队列 {report['retention']['cohort_size']}"
     )
 

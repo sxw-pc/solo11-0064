@@ -76,31 +76,54 @@ def _shell(title: str, body: str) -> str:
 
 
 def _funnel_section(funnel: dict[str, Any]) -> str:
-    maximum = max([step.get("users", 0) for step in funnel.get("steps", [])] or [0])
+    maximum = max([step.get("attempts", 0) for step in funnel.get("steps", [])] or [0])
     rows = []
     for step in funnel.get("steps", []):
         rows.append(
             [
                 _e(step.get("index")),
                 f"<strong>{_e(step.get('name'))}</strong><br><span class=\"muted\"><code>{_e(step.get('event'))}</code></span>",
-                f"{_e(step.get('users'))}{_bar(step.get('users', 0), maximum)}",
+                f"{_e(step.get('attempts'))}{_bar(step.get('attempts', 0), maximum)}",
+                _e(step.get("users")),
                 _e(_pct(step.get("conversion_from_first"))),
                 _e(_pct(step.get("conversion_from_previous"))),
+                _e(_pct(step.get("user_conversion_from_first"))),
                 _e(step.get("dropoff_from_previous")),
             ]
         )
-    table = _table(["#", "步骤", "用户", "较首步", "较上步", "上步流失"], rows)
+    table = _table(
+        ["#", "步骤", "尝试", "去重用户", "较首步(尝试)", "较上步(尝试)", "较首步(用户)", "上步流失"],
+        rows,
+    )
     segments = ""
     for field, values in funnel.get("by_segment", {}).items():
         seg_rows = [
-            [_e(item.get("value")), _e(item.get("entered_users")), _e(item.get("converted_users")), _e(_pct(item.get("overall_conversion")))]
+            [
+                _e(item.get("value")),
+                _e(item.get("attempts")),
+                _e(item.get("entered_users")),
+                _e(item.get("converted_attempts")),
+                _e(item.get("converted_users")),
+                _e(_pct(item.get("attempt_conversion"))),
+                _e(_pct(item.get("overall_conversion"))),
+            ]
             for item in values
         ]
-        segments += f"<h3>漏斗分群 · <code>{_e(field)}</code></h3>" + _table(["分群值", "入口", "完成", "转化率"], seg_rows)
+        segments += f"<h3>漏斗分群 · <code>{_e(field)}</code></h3>" + _table(
+            ["分群值", "入口尝试", "入口用户", "完成尝试", "完成用户", "转化率(尝试)", "转化率(用户)"],
+            seg_rows,
+        )
+    methodology = funnel.get("methodology", {})
     return (
         "<h2>漏斗</h2>"
         f"<p class=\"sub\">{_e(funnel.get('name'))} · 窗口 {_e(funnel.get('window'))} · "
-        "从首步起算（含端点）</p>" + table + segments
+        "从首步起算（含端点）<br>"
+        f"复入口径：<strong>{_e(methodology.get('entry_mode_label'))}</strong>"
+        f"（<code>{_e(funnel.get('entry_mode'))}</code>）· {_e(methodology.get('entry_rule'))}<br>"
+        f"入口尝试 {_e(funnel.get('attempts'))} · 去重入口用户 {_e(funnel.get('entered_users'))} · "
+        f"完成尝试 {_e(funnel.get('converted_attempts'))} · 去重完成用户 {_e(funnel.get('converted_users'))} · "
+        f"尝试转化 {_e(_pct(funnel.get('attempt_conversion')))} · "
+        f"用户转化 {_e(_pct(funnel.get('overall_conversion')))}</p>" + table + segments
     )
 
 
@@ -175,10 +198,12 @@ def render_run_html(report: dict[str, Any]) -> str:
     title = spec.get("title", "漏斗与留存验算")
     cards = (
         '<div class="cards">'
-        f'<div class="card"><div class="label">漏斗入口</div><div class="value">{_e(funnel.get("entered_users"))}</div></div>'
-        f'<div class="card"><div class="label">漏斗完成</div><div class="value">{_e(funnel.get("converted_users"))}</div></div>'
-        f'<div class="card"><div class="label">整体转化</div><div class="value">{_e(_pct(funnel.get("overall_conversion")))}</div></div>'
+        f'<div class="card"><div class="label">漏斗入口（用户）</div><div class="value">{_e(funnel.get("entered_users"))}</div></div>'
+        f'<div class="card"><div class="label">漏斗完成（用户）</div><div class="value">{_e(funnel.get("converted_users"))}</div></div>'
+        f'<div class="card"><div class="label">整体转化（用户）</div><div class="value">{_e(_pct(funnel.get("overall_conversion")))}</div></div>'
         f'<div class="card"><div class="label">留存队列</div><div class="value">{_e(retention.get("cohort_size"))}</div></div>'
+        f'<div class="card"><div class="label">入口尝试</div><div class="value">{_e(funnel.get("attempts"))}</div></div>'
+        f'<div class="card"><div class="label">尝试转化</div><div class="value">{_e(_pct(funnel.get("attempt_conversion")))}</div></div>'
         "</div>"
     )
     meta = (

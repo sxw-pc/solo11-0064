@@ -111,6 +111,7 @@ events:
 funnel:
   name: signup_to_purchase
   window: 7d
+  entry_mode: first_entry   # first_entry | every_entry
   steps:
     - name: 浏览落地页
       event: landing_view
@@ -164,10 +165,13 @@ segments:
 ### 漏斗
 
 - 用户按上述顺序扫描事件；步骤必须按声明顺序匹配，每个步骤消耗一个匹配事件。
-- 以**首个命中步骤 1 的事件**为入口；后续步骤必须在其 `funnel.window` 内完成（含端点），否则该用户不转化，不重新尝试入口。
-- 允许跳过无关事件；`where` 对事件字段做标量精确匹配（字符串化后比较）。
-- 输出每步用户数、较首步转化率、较上一步转化率和上一步流失。
-- 分群值取用户**命中步骤 1 的事件**对应字段；缺失值为 `(missing)`。
+- 后续步骤必须在入口事件的 `funnel.window` 内完成（含端点）；允许跳过无关事件；`where` 对事件字段做标量精确匹配（字符串化后比较）。
+- **复入归属口径**由 `funnel.entry_mode` 显式选择，两种口径会真实改变转化率与分群归属：
+  - `first_entry`（默认，每用户只认首次入口）：以**首个命中步骤 1 的事件**为唯一入口；窗口内未完成不重新尝试，之后的命中事件被忽略。每条用户至多一条路径，尝试数等于去重用户数。
+  - `every_entry`（每次入口单独计数）：**每个命中步骤 1 的事件**都开启一条独立尝试。每个事件至多被一条尝试消耗一次（命中首步的事件被新尝试消耗；其余事件按扫描顺序提供给窗口内的未完成尝试，先开启者优先）；同一后续事件不会计入多条尝试，窗口外事件不补入已超时的旧路径。同刻多次首步按同刻排序规则各自成为独立尝试。
+- 结果同时给出**尝试数**（`attempts`）与**去重用户数**（`users`）两套分母：`conversion_from_first`/`conversion_from_previous` 以尝试数为分母，`user_conversion_from_*` 以去重用户数为分母；顶层 `overall_conversion` 为用户口径，`attempt_conversion` 为尝试口径。
+- 分群归属跟随**实际被计入的入口事件**：`first_entry` 取用户唯一入口事件字段；`every_entry` 按每条尝试的入口事件归属，同一用户的不同尝试可进入不同分群。缺失值为 `(missing)`。
+- 口径、消耗规则与分母说明写入报告 `funnel.methodology` 与 Markdown/HTML 报告；`compare` 会把 `entry_mode` 变化识别为规格变化（`spec.funnel.entry_mode`），并对比尝试口径指标。
 
 ### 留存
 

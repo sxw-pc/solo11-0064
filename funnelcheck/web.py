@@ -131,7 +131,7 @@ def create_app(root: str | Path | None = None) -> FastAPI:
     def run_detail(request: Request, run_id: str) -> Any:
         report = load_run_report(root_path, run_id)
         funnel_max = max(
-            [step.get("users", 0) for step in report.get("funnel", {}).get("steps", [])]
+            [step.get("attempts", 0) for step in report.get("funnel", {}).get("steps", [])]
             or [0]
         )
         return _TEMPLATES.TemplateResponse(

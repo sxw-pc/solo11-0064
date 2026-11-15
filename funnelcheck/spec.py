@@ -54,6 +54,7 @@ class StepSpec(StrictModel):
 class FunnelSpec(StrictModel):
     name: str = Field(min_length=1, max_length=80)
     window: str = "7d"
+    entry_mode: Literal["first_entry", "every_entry"] = "first_entry"
     steps: list[StepSpec] = Field(min_length=2, max_length=20)
 
     @field_validator("window")

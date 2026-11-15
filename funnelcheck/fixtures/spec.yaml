@@ -13,6 +13,7 @@ events:
 funnel:
   name: signup_to_purchase
   window: 7d
+  entry_mode: first_entry   # first_entry（每用户只认首次入口）| every_entry（每次入口单独计数）
   steps:
     - name: 浏览落地页
       event: landing_view

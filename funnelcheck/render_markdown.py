@@ -93,7 +93,9 @@ def render_run_markdown(report: dict[str, Any]) -> str:
         "",
         f"- 名称：{funnel.get('name')}",
         f"- 窗口：{funnel.get('window')}（从首步事件起算，含端点）",
-        f"- 入口用户：{funnel.get('entered_users', 0)}；完成用户：{funnel.get('converted_users', 0)}；整体转化：{pct(funnel.get('overall_conversion'))}",
+        f"- 复入口径：{funnel.get('methodology', {}).get('entry_mode_label', funnel.get('entry_mode', '—'))}（`{funnel.get('entry_mode', '—')}`）",
+        f"- 入口尝试：{funnel.get('attempts', 0)}；去重入口用户：{funnel.get('entered_users', 0)}；完成尝试：{funnel.get('converted_attempts', 0)}；去重完成用户：{funnel.get('converted_users', 0)}",
+        f"- 整体转化（用户口径）：{pct(funnel.get('overall_conversion'))}；尝试转化（尝试口径）：{pct(funnel.get('attempt_conversion'))}",
         "",
     ]
     rows = [
@@ -101,26 +103,37 @@ def render_run_markdown(report: dict[str, Any]) -> str:
             step.get("index"),
             step.get("name"),
             step.get("event"),
+            step.get("attempts"),
             step.get("users"),
             pct(step.get("conversion_from_first")),
             pct(step.get("conversion_from_previous")),
+            pct(step.get("user_conversion_from_first")),
             step.get("dropoff_from_previous"),
         ]
         for step in funnel.get("steps", [])
     ]
-    lines += _table(["#", "步骤", "事件", "用户", "较首步", "较上一步", "上步流失"], rows)
+    lines += _table(
+        ["#", "步骤", "事件", "尝试", "去重用户", "较首步(尝试)", "较上一步(尝试)", "较首步(用户)", "上步流失(尝试)"],
+        rows,
+    )
     for field, values in funnel.get("by_segment", {}).items():
         lines += [f"### 漏斗分群：`{field}`", ""]
         segment_rows = [
             [
                 item.get("value"),
+                item.get("attempts"),
                 item.get("entered_users"),
+                item.get("converted_attempts"),
                 item.get("converted_users"),
+                pct(item.get("attempt_conversion")),
                 pct(item.get("overall_conversion")),
             ]
             for item in values
         ]
-        lines += _table(["分群值", "入口用户", "完成用户", "转化率"], segment_rows)
+        lines += _table(
+            ["分群值", "入口尝试", "入口用户", "完成尝试", "完成用户", "转化率(尝试)", "转化率(用户)"],
+            segment_rows,
+        )
 
     lines += [
         "## 留存",
@@ -177,6 +190,9 @@ def render_run_markdown(report: dict[str, Any]) -> str:
         f"- 去重键/保留：`{quality.get('rules', {}).get('dedup_key')}` / `{quality.get('rules', {}).get('dedup_keep')}`",
         f"- 迟到阈值：{quality.get('rules', {}).get('late_after_seconds')} 秒；策略：`{quality.get('rules', {}).get('late_policy')}`",
         f"- 未来宽限：{quality.get('rules', {}).get('future_grace_seconds')} 秒",
+        f"- 漏斗复入规则：{funnel.get('methodology', {}).get('entry_rule')}",
+        f"- 漏斗分群归属：{funnel.get('methodology', {}).get('segment_assignment')}",
+        f"- 转化率分母：{funnel.get('methodology', {}).get('rate_denominators')}",
         "",
         "## 复现",
         "",
