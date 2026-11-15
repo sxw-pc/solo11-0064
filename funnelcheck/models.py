@@ -76,6 +76,55 @@ def _sorted_mapping(value: Mapping[str, Any]) -> dict[str, Any]:
     return output
 
 
+def format_duration_seconds(value: float | None) -> str:
+    """把秒数格式化为便于审阅的短标签；不参与计算与哈希。"""
+    if value is None:
+        return "—"
+    seconds = float(value)
+    if seconds < 60:
+        return f"{seconds:g}s"
+    if seconds < 3600:
+        return f"{seconds / 60:.1f}m"
+    if seconds < 86400:
+        return f"{seconds / 3600:.1f}h"
+    return f"{seconds / 86400:.2f}d"
+
+
+@dataclass(frozen=True, slots=True)
+class StepHit:
+    """某用户按排序键依次命中的一个漏斗步骤。"""
+
+    step_index: int
+    event: Event
+    elapsed_seconds: float  # 相对首步 occurred_at 的差值
+
+
+@dataclass(frozen=True, slots=True)
+class UserPath:
+    """一个用户的漏斗路径与右删失观察边界。
+
+    ``observation_cutoff`` = min(as_of, 首步 occurred_at + funnel.window)。
+    normalize 已排除 as_of 之后的事件，因此该截止表达的是“观察到哪里”，
+    而不是“用户明确失败”。
+    """
+
+    user_id: str
+    reached: int
+    first_event: Event
+    hits: tuple[StepHit, ...]
+    observation_cutoff: datetime
+    window_censored: bool
+
+
+@dataclass(frozen=True, slots=True)
+class DurationObservation:
+    """一次“上一步 → 下一步”的耗时观测；未完成者为右删失。"""
+
+    duration_seconds: float
+    converted: bool
+    censored_reason: str | None = None  # window | observation
+
+
 @dataclass(frozen=True, slots=True)
 class RawRow:
     line_no: int

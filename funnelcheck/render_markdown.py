@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from .report import duration_median_label, duration_rows
+
 QUALITY_LABELS = {
     "records_seen": "非空记录行",
     "records_parsed": "成功解析 JSON",
@@ -70,6 +72,81 @@ def _short(value: Any) -> str:
     return text[:12] if text else "—"
 
 
+def _median_markdown(value: Any) -> str:
+    """无法估计时明确写 ``null``，与 JSON 语义一致。"""
+    return "null" if value is None else duration_median_label(value)
+
+
+def _duration_markdown(funnel: dict[str, Any]) -> list[str]:
+    rows = duration_rows(funnel)
+    if not rows:
+        return []
+    duration = funnel.get("duration") or {}
+    methodology = duration.get("methodology") or {}
+    lines = [
+        "### 逐步转化耗时（含右删失）",
+        "",
+        f"- 观察截止：`{methodology.get('observation_cutoff')}`；"
+        f"事件时间以 `occurred_at` 差计，窗口端点算转化。",
+        f"- 未完成者按右删失纳入 Kaplan–Meier 估计；同刻先转化、后删失。",
+        "",
+    ]
+    summary_rows = [
+        [
+            f"{row['from_step']} → {row['to_step']}",
+            f"{row['from_name']} → {row['to_name']}",
+            row["entered_users"],
+            row["converted_users"],
+            row["censored_users"],
+            f"{row['censored_window_users']} / {row['censored_observation_users']}",
+            pct(row["conversion_rate"]),
+            _median_markdown(row["observed_median_seconds"]),
+            _median_markdown(row["survival_median_seconds"]),
+        ]
+        for row in rows
+    ]
+    lines += _table(
+        ["步骤", "路径", "到达", "已转化", "删失", "窗口/截止删失", "转化率",
+         "完成者中位", "生存中位"],
+        summary_rows,
+    )
+    for row in rows:
+        lines += [
+            f"#### {row['from_step']} → {row['to_step']} · "
+            f"{row['from_name']} → {row['to_name']}",
+            "",
+            "| 观察时点 | 仍未转化 | 风险集 | 累计已转化 | 累计删失 |",
+            "| --- | --- | --- | --- | --- |",
+        ]
+        for point in row["points"]:
+            window_position = point.get("window_fraction")
+            label = (
+                f"{point['label']}（窗口的 {window_position:.1%}）"
+                if window_position is not None
+                else point["label"]
+            )
+            lines.append(
+                "| "
+                + " | ".join(
+                    [
+                        _cell(label),
+                        pct(point["not_converted_ratio"]),
+                        _cell(point["at_risk_users"]),
+                        _cell(point["converted_by"]),
+                        _cell(point["censored_by"]),
+                    ]
+                )
+                + " |"
+            )
+        lines.append("")
+    lines += [
+        "> “完成者中位”只描述已转化样本；“生存中位”把删失用户纳入风险集，"
+        "才是总体口径。无法估计时明确为 `null`。",
+        "",
+    ]
+    return lines
+
+
 def render_run_markdown(report: dict[str, Any]) -> str:
     spec = report.get("spec", {})
     document = spec.get("document", {})
@@ -109,6 +186,7 @@ def render_run_markdown(report: dict[str, Any]) -> str:
         for step in funnel.get("steps", [])
     ]
     lines += _table(["#", "步骤", "事件", "用户", "较首步", "较上一步", "上步流失"], rows)
+    lines += _duration_markdown(funnel)
     for field, values in funnel.get("by_segment", {}).items():
         lines += [f"### 漏斗分群：`{field}`", ""]
         segment_rows = [

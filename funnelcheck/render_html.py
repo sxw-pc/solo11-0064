@@ -5,6 +5,7 @@ from __future__ import annotations
 from html import escape
 from typing import Any
 
+from .report import duration_median_label, duration_rows
 from .render_markdown import QUALITY_LABELS, REASON_LABELS
 
 _CSS = """
@@ -75,10 +76,89 @@ def _shell(title: str, body: str) -> str:
     )
 
 
+def _median_html(value: Any) -> str:
+    """无法估计时显示 <code>null</code>，与 JSON 的 null 语义一致。"""
+    if value is None:
+        return "<code>null</code>"
+    return _e(duration_median_label(value))
+
+
+def _duration_section(funnel: dict[str, Any]) -> str:
+    rows = duration_rows(funnel)
+    if not rows:
+        return ""
+    methodology = (funnel.get("duration") or {}).get("methodology") or {}
+    summary = _table(
+        ["步骤", "路径", "到达", "已转化", "删失", "窗口/截止删失", "转化率",
+         "完成者中位", "生存中位"],
+        [
+            [
+                _e(f"{row['from_step']} → {row['to_step']}"),
+                f"{_e(row['from_name'])} → {_e(row['to_name'])}",
+                _e(row["entered_users"]),
+                _e(row["converted_users"]),
+                _e(row["censored_users"]),
+                _e(f"{row['censored_window_users']} / {row['censored_observation_users']}"),
+                _e(_pct(row["conversion_rate"])),
+                _median_html(row["observed_median_seconds"]),
+                _median_html(row["survival_median_seconds"]),
+            ]
+            for row in rows
+        ],
+    )
+    detail = ""
+    for row in rows:
+        point_rows = []
+        for point in row["points"]:
+            position = point.get("window_fraction")
+            label = (
+                f"{point['label']}（窗口的 {position:.1%}）"
+                if position is not None
+                else point["label"]
+            )
+            point_rows.append(
+                [
+                    _e(label),
+                    _e(_pct(point["not_converted_ratio"])),
+                    _e(point["at_risk_users"]),
+                    _e(point["converted_by"]),
+                    _e(point["censored_by"]),
+                ]
+            )
+        points = _table(
+            ["观察时点", "仍未转化", "风险集", "累计已转化", "累计删失"],
+            point_rows,
+        )
+        detail += (
+            f"<h3>{_e(row['from_step'])} → {_e(row['to_step'])} · "
+            f"{_e(row['from_name'])} → {_e(row['to_name'])}</h3>" + points
+        )
+    note = (
+        "<p class=\"muted\">“完成者中位”只描述已转化样本；“生存中位”把删失用户"
+        "纳入风险集，才是总体口径。无法估计时明确显示 <code>null</code>。</p>"
+    )
+    return (
+        "<h2>逐步转化耗时（含右删失）</h2>"
+        f"<p class=\"sub\">观察截止 {_e(methodology.get('observation_cutoff'))} · "
+        "事件时间以 <code>occurred_at</code> 差计 · 窗口端点算转化 · "
+        "未完成者按 Kaplan–Meier 右删失估计</p>"
+        + summary
+        + detail
+        + note
+    )
+
+
 def _funnel_section(funnel: dict[str, Any]) -> str:
     maximum = max([step.get("users", 0) for step in funnel.get("steps", [])] or [0])
     rows = []
     for step in funnel.get("steps", []):
+        onset = step.get("time_to_convert")
+        onset_cell = "—"
+        if onset is not None:
+            onset_cell = (
+                f"完成者 {_e(onset.get('observed_median_label'))}<br>"
+                f"生存 {_e((onset.get('survival') or {}).get('median_label'))}"
+            )
         rows.append(
             [
                 _e(step.get("index")),
@@ -87,9 +167,13 @@ def _funnel_section(funnel: dict[str, Any]) -> str:
                 _e(_pct(step.get("conversion_from_first"))),
                 _e(_pct(step.get("conversion_from_previous"))),
                 _e(step.get("dropoff_from_previous")),
+                onset_cell,
             ]
         )
-    table = _table(["#", "步骤", "用户", "较首步", "较上步", "上步流失"], rows)
+    table = _table(
+        ["#", "步骤", "用户", "较首步", "较上步", "上步流失", "上一步 → 本步中位"],
+        rows,
+    )
     segments = ""
     for field, values in funnel.get("by_segment", {}).items():
         seg_rows = [
@@ -100,7 +184,7 @@ def _funnel_section(funnel: dict[str, Any]) -> str:
     return (
         "<h2>漏斗</h2>"
         f"<p class=\"sub\">{_e(funnel.get('name'))} · 窗口 {_e(funnel.get('window'))} · "
-        "从首步起算（含端点）</p>" + table + segments
+        "从首步起算（含端点）</p>" + table + segments + _duration_section(funnel)
     )
 
 

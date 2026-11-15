@@ -14,9 +14,60 @@ from .config import (
     sha256_bytes,
 )
 from .errors import ErrorCode, FunnelCheckError
-from .models import NormalizedBatch, RawInput, SpecBundle
-from .render_html import render_compare_html, render_run_html
-from .render_markdown import render_compare_markdown, render_run_markdown
+from .models import NormalizedBatch, RawInput, SpecBundle, format_duration_seconds
+
+
+def duration_rows(funnel: dict[str, Any]) -> list[dict[str, Any]]:
+    """把逐步耗时结果规整为渲染层可消费的行。
+
+    保留 ``None``（JSON ``null``）语义：无法估计的中位耗时不得被零或
+    完成者分位数替代。Markdown/HTML 与 JSON 共用这一份结构。
+    """
+    duration = funnel.get("duration") or {}
+    rows: list[dict[str, Any]] = []
+    for transition in duration.get("transitions", []):
+        survival = transition.get("survival") or {}
+        rows.append(
+            {
+                "from_step": transition.get("from_step"),
+                "to_step": transition.get("to_step"),
+                "from_name": transition.get("from_name"),
+                "to_name": transition.get("to_name"),
+                "from_event": transition.get("from_event"),
+                "to_event": transition.get("to_event"),
+                "entered_users": transition.get("entered_users", 0),
+                "converted_users": transition.get("converted_users", 0),
+                "censored_users": transition.get("censored_users", 0),
+                "censored_window_users": transition.get("censored_window_users", 0),
+                "censored_observation_users": transition.get(
+                    "censored_observation_users", 0
+                ),
+                "conversion_rate": transition.get("conversion_rate"),
+                "observed_median_seconds": transition.get("observed_median_seconds"),
+                "observed_median_label": transition.get("observed_median_label"),
+                "survival_median_seconds": survival.get("median_seconds"),
+                "survival_median_label": survival.get("median_label"),
+                "points": [
+                    {
+                        "label": point.get("label"),
+                        "elapsed_seconds": point.get("elapsed_seconds"),
+                        "fraction": point.get("fraction"),
+                        "window_fraction": point.get("window_fraction"),
+                        "at_risk_users": point.get("at_risk_users", 0),
+                        "converted_by": point.get("converted_by", 0),
+                        "censored_by": point.get("censored_by", 0),
+                        "not_converted_ratio": point.get("not_converted_ratio"),
+                    }
+                    for point in survival.get("points", [])
+                ],
+            }
+        )
+    return rows
+
+
+def duration_median_label(value: Any) -> str:
+    """无法估计时明确输出 ``null``，与 JSON 语义一致。"""
+    return "null" if value is None else format_duration_seconds(value)
 
 
 def dump_json(value: Any) -> str:
@@ -104,6 +155,9 @@ def _hashed_artifacts(run_dir: Path, names: list[str]) -> dict[str, Any]:
 
 
 def write_run_artifacts(report: dict[str, Any], run_dir: str | Path) -> tuple[str, ...]:
+    from .render_html import render_run_html
+    from .render_markdown import render_run_markdown
+
     directory = Path(run_dir)
     files = {
         "report.json": dump_json(report),
@@ -134,6 +188,9 @@ def _comparison_manifest(
 def write_comparison_artifacts(
     comparison: dict[str, Any], comparison_dir: str | Path
 ) -> tuple[str, ...]:
+    from .render_html import render_compare_html
+    from .render_markdown import render_compare_markdown
+
     directory = Path(comparison_dir)
     files = {
         "compare.json": dump_json(comparison),

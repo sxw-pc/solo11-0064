@@ -54,6 +54,63 @@
     </table>
   </div>
 
+  {% set transitions = report.funnel.duration.transitions if report.funnel.duration else [] %}
+  {% if transitions %}
+  <h3 class="subhead">逐步转化耗时（含右删失）</h3>
+  <p class="subtle">
+    观察截止 {{ report.funnel.duration.methodology.observation_cutoff }} ·
+    事件时间以 <code>occurred_at</code> 差计 · 窗口端点算转化 ·
+    未完成者按 Kaplan–Meier 右删失估计；同刻先转化、后删失。
+  </p>
+  <div class="table-scroll">
+    <table>
+      <thead>
+        <tr><th>步骤</th><th>到达</th><th>已转化</th><th>删失</th><th>窗口/截止删失</th><th>完成者中位</th><th>生存中位</th></tr>
+      </thead>
+      <tbody>
+        {% for item in transitions %}
+        <tr>
+          <td><strong>{{ item.from_step }} → {{ item.to_step }}</strong>
+            <div class="subtle">{{ item.from_name }} → {{ item.to_name }}</div></td>
+          <td>{{ item.entered_users }}</td>
+          <td>{{ item.converted_users }}</td>
+          <td>{{ item.censored_users }}</td>
+          <td>{{ item.censored_window_users }} / {{ item.censored_observation_users }}</td>
+          <td>{{ item.observed_median_label if item.observed_median_seconds is not none else "null" }}</td>
+          <td>{{ item.survival.median_label if item.survival.median_seconds is not none else "null" }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% for item in transitions %}
+  <details>
+    <summary>{{ item.from_step }} → {{ item.to_step }} · 各观察时点仍未转化比例</summary>
+    <div class="table-scroll">
+      <table>
+        <thead><tr><th>观察时点</th><th>仍未转化</th><th>风险集</th><th>累计已转化</th><th>累计删失</th></tr></thead>
+        <tbody>
+          {% for point in item.survival.points %}
+          <tr>
+            <td>
+              {% if point.window_fraction is not none %}
+                {{ point.label }}（窗口的 {{ (point.window_fraction * 100) | round(2) }}%）
+              {% else %}{{ point.label }}{% endif %}
+            </td>
+            <td>{{ point.not_converted_ratio | pct }}</td>
+            <td>{{ point.at_risk_users }}</td>
+            <td>{{ point.converted_by }}</td>
+            <td>{{ point.censored_by }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </details>
+  {% endfor %}
+  <p class="subtle">“完成者中位”只描述已转化样本；“生存中位”把删失用户纳入风险集，才是总体口径。</p>
+  {% endif %}
+
   {% for field, values in report.funnel.by_segment.items() %}
   <h3 class="subhead">漏斗分群 · <code>{{ field }}</code></h3>
   <div class="table-scroll">
