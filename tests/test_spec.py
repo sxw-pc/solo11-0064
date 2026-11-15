@@ -60,6 +60,23 @@ def test_periods_reject_duplicates_and_booleans(tmp_path: Path) -> None:
         load_spec(boolean)
 
 
+def test_month_unit_is_accepted_and_unknown_units_are_rejected(tmp_path: Path) -> None:
+    month = write_spec(
+        tmp_path,
+        name="month.yaml",
+        retention={"unit": "month", "periods": [1, 2]},
+    )
+    bundle = load_spec(month)
+    assert bundle.spec.retention.unit == "month"
+    assert bundle.document["retention"]["unit"] == "month"
+
+    unknown = write_spec(
+        tmp_path, name="quarter.yaml", retention={"unit": "quarter"}
+    )
+    with pytest.raises(SpecError, match="unit"):
+        load_spec(unknown)
+
+
 def test_unknown_field_and_invalid_where_are_rejected(tmp_path: Path) -> None:
     path = write_spec(tmp_path, mystery_field=True)
     with pytest.raises(SpecError, match="mystery_field"):

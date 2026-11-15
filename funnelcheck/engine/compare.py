@@ -112,10 +112,15 @@ def _metrics(base: dict[str, Any], cand: dict[str, Any]) -> list[dict[str, Any]]
     return items
 
 
-def _label_sort(label: str) -> tuple[str, int]:
-    prefix = label[:1]
-    number = "".join(char for char in label[1:] if char.isdigit())
-    return prefix, int(number or 0)
+# 周期标签按单位分组排序；比较跨单位报告时 M1 不会与 D1/W1 因位置相邻而被混用。
+_LABEL_UNIT_ORDER = {"D": 0, "W": 1, "M": 2}
+
+
+def _label_sort(label: str) -> tuple[int, str, int]:
+    text = str(label or "").strip()
+    prefix = text[:1].upper()
+    number = "".join(char for char in text[1:] if char.isdigit())
+    return (_LABEL_UNIT_ORDER.get(prefix, len(_LABEL_UNIT_ORDER)), prefix, int(number or 0))
 
 
 def _quality_changes(base: dict[str, Any], cand: dict[str, Any]) -> list[dict[str, Any]]:

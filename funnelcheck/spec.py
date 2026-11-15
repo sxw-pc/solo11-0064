@@ -73,7 +73,7 @@ class FunnelSpec(StrictModel):
 class RetentionSpec(StrictModel):
     cohort_event: str = Field(min_length=1, max_length=200)
     return_event: str = Field(min_length=1, max_length=200)
-    unit: Literal["day", "week"] = "day"
+    unit: Literal["day", "week", "month"] = "day"
     periods: list[int] = Field(min_length=1, max_length=30)
     mode: Literal["exact", "cumulative"] = "exact"
 

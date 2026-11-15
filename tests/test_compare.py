@@ -141,3 +141,117 @@ def test_comparison_id_is_deterministic_and_summary_present(tmp_path: Path) -> N
     assert first["baseline"]["funnel"]["entered_users"] == 2
     assert "D1" in first["baseline"]["retention"]["periods"] or first["baseline"]["retention"]["periods"] == {}
     assert isinstance(first["quality_changes"], list)
+
+
+MONTH_RETENTION = {
+    "retention": {
+        "cohort_event": "signup",
+        "return_event": "view",
+        "unit": "month",
+        "periods": [1, 2],
+        "mode": "exact",
+    }
+}
+
+
+def _month_events() -> list[dict]:
+    return [
+        make_event("s1", "u1", "signup", "2026-01-10T00:00:00Z"),
+        make_event("r1", "u1", "view", "2026-02-10T00:00:00Z"),
+        make_event("s2", "u2", "signup", "2026-01-20T00:00:00Z"),
+        make_event("r2", "u2", "view", "2026-03-05T00:00:00Z"),
+    ]
+
+
+def test_month_labels_sort_and_compare(tmp_path: Path) -> None:
+    events = _month_events()
+    baseline = run_once(
+        tmp_path,
+        events,
+        name="baseline",
+        analysis={"as_of": "2026-06-01T00:00:00Z"},
+        **MONTH_RETENTION,
+    ).report
+    candidate = run_once(
+        tmp_path,
+        events,
+        name="candidate",
+        analysis={"as_of": "2026-06-01T00:00:00Z"},
+        retention={**MONTH_RETENTION["retention"], "mode": "cumulative"},
+    ).report
+    result = compare_reports(baseline, candidate)
+    assert result["flags"]["config_changed"] is True
+    keys = [item["key"] for item in result["metrics"] if item["key"].startswith("retention.periods.")]
+    # 指标顺序为 M1 后 M2，不能是 M1 之后跳到字符串排序意外的位置。
+    assert keys[:3] == [
+        "retention.periods.M1.eligible_users",
+        "retention.periods.M1.retained_users",
+        "retention.periods.M1.retention_rate",
+    ]
+    assert "retention.periods.M2.retained_users" in keys
+    m2 = next(item for item in result["metrics"] if item["key"] == "retention.periods.M2.retained_users")
+    assert m2["baseline"] == 1
+    assert m2["candidate"] == 2
+    assert "M1" in result["baseline"]["retention"]["periods"]
+    assert "M2" in result["candidate"]["retention"]["periods"]
+
+
+def test_incompatible_day_and_month_reports_do_not_mismatch_labels(tmp_path: Path) -> None:
+    events = _month_events()
+    day_report = run_once(
+        tmp_path,
+        events,
+        name="day",
+        analysis={"as_of": "2026-06-01T00:00:00Z"},
+        retention={
+            "cohort_event": "signup",
+            "return_event": "view",
+            "unit": "day",
+            "periods": [1, 2],
+            "mode": "exact",
+        },
+    ).report
+    month_report = run_once(
+        tmp_path,
+        events,
+        name="month",
+        analysis={"as_of": "2026-06-01T00:00:00Z"},
+        **MONTH_RETENTION,
+    ).report
+    result = compare_reports(day_report, month_report)
+    labels = [item["key"].split(".")[2] for item in result["metrics"] if item["key"].startswith("retention.periods.")]
+    assert "D1" in labels and "D2" in labels
+    assert "M1" in labels and "M2" in labels
+    # D1/M1 是不同指标：M1 的基线端为空，不能与 D1 的基线值按位置对齐。
+    m1_eligible = next(item for item in result["metrics"] if item["key"] == "retention.periods.M1.eligible_users")
+    d1_eligible = next(item for item in result["metrics"] if item["key"] == "retention.periods.D1.eligible_users")
+    assert m1_eligible["baseline"] is None
+    assert d1_eligible["candidate"] is None
+    assert result["flags"]["config_changed"] is True
+    assert result["verdict"] == "config_changed"
+
+
+def test_week_and_month_reports_keep_distinct_labels(tmp_path: Path) -> None:
+    events = _month_events()
+    week_report = run_once(
+        tmp_path,
+        events,
+        name="week",
+        analysis={"as_of": "2026-06-01T00:00:00Z"},
+        retention={**MONTH_RETENTION["retention"], "unit": "week"},
+    ).report
+    month_report = run_once(
+        tmp_path,
+        events,
+        name="month2",
+        analysis={"as_of": "2026-06-01T00:00:00Z"},
+        **MONTH_RETENTION,
+    ).report
+    result = compare_reports(week_report, month_report)
+    keys = [item["key"] for item in result["metrics"]]
+    assert "retention.periods.W1.retained_users" in keys
+    assert "retention.periods.M1.retained_users" in keys
+    w1 = next(item for item in result["metrics"] if item["key"] == "retention.periods.W1.retained_users")
+    m1 = next(item for item in result["metrics"] if item["key"] == "retention.periods.M1.retained_users")
+    assert w1["candidate"] is None
+    assert m1["baseline"] is None

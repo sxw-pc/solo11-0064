@@ -77,7 +77,7 @@ funnelcheck/
     dedup.py             去重键与保留策略
     quality.py           质量计数与样例
     funnel.py            有序漏斗与分群
-    retention.py         日/周队列留存与分群
+    retention.py         日/周/自然月队列留存与分群
     compare.py           指标/规格/输入差异与归因
     order.py             唯一事件排序规则
   report.py              报告组装、稳定 JSON、原子写入
@@ -123,7 +123,7 @@ funnel:
 retention:
   cohort_event: signup
   return_event: landing_view
-  unit: day                 # day | week
+  unit: day                 # day | week | month
   periods: [1, 3, 7]
   mode: exact               # exact | cumulative
 segments:
@@ -173,9 +173,13 @@ segments:
 
 - 每个用户首次命中 `cohort_event` 作为队列事件；按分析时区的**本地日历日期**归入 Cohort。
 - 回访事件按本地日期差归入周期；第 1 天/第 1 周为下一个完整日/周，不把 Cohort 当天算作回访。
+- `unit: month` 按**本地日历月**归期：Cohort 日所在自然月为 M0，下一自然月为 M1，依此类推。同月回访属于 M0，不算 M1；跨两个月及以上按月份差归入 M2、M3……
+- 自然月周期不使用固定 30 天近似：M1 指 Cohort 所在月之后的第一个完整自然月。完整可观察判定为目标自然月最后一天结束后的次日（即下一个月 1 日）的本地日期，因此 28/29/30/31 天月份、闰年二月和跨年都会各自落在正确的成熟日。
+- 先按分析时区把时间戳转为本地日期，再以年月序号计算周期，避免 UTC 午夜或 DST 把事件分到相邻月份。
 - `exact` 只统计恰好第 N 周期；`cumulative` 统计 1..N 周期内至少一次回访。
-- 只有完整结束的周期才进入分母（周期结束后次日）。分母为 `eligible_users`，留存率为 `retained_users / eligible_users`；没有可观察用户时为 `null`。
+- 只有完整结束的周期才进入分母（周期结束后次日；自然月为下一个月 1 日）。分母为 `eligible_users`，留存率为 `retained_users / eligible_users`；没有可观察用户时为 `null`。
 - 输出总览、每日 Cohort 明细和分群；留存分群取 Cohort 事件字段。
+- 周期标签为 `D1`/`W1`/`M1`；对比报告按完整标签匹配，跨单位对比不会把 M1 与 D1/W1 按位置混用。旧 day/week 规格的标签与 `run_id` 保持不变。
 
 ### 确定性与舍入
 
@@ -233,7 +237,7 @@ runs/
 python -m pytest -q
 ```
 
-测试覆盖规格校验、20MB 限制、去重与同刻排序、DST/时区、漏斗窗口、`where`、数据质量、日/周留存、对比归因、报告确定性、台账、Web 回环与只读页面、CLI 完整流程。全部使用 `tmp_path`，不会向仓库写入运行产物。
+测试覆盖规格校验、20MB 限制、去重与同刻排序、DST/时区、漏斗窗口、`where`、数据质量、日/周/自然月留存、对比归因、报告确定性、台账、Web 回环与只读页面、CLI 完整流程。全部使用 `tmp_path`，不会向仓库写入运行产物。
 
 ## 已知限制
 
